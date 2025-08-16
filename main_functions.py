@@ -236,10 +236,16 @@ def GetBlobDetectionParams():
     dialog = tk.Toplevel()
     dialog.title("Hessian Blob Parameters")
     dialog.geometry("700x400")
-    dialog.transient()
+    dialog.transient(root)  # Make transient to root instead of None
     dialog.grab_set()
     dialog.focus_set()
-
+    
+    # Enhanced dialog visibility for all platforms
+    dialog.update_idletasks()
+    x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_reqwidth() // 2)
+    y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_reqheight() // 2)
+    dialog.geometry(f"+{x}+{y}")
+    
     # Make dialog more visible
     dialog.lift()  # Bring to front
     dialog.attributes('-topmost', True)  # Keep on top temporarily
@@ -315,11 +321,22 @@ def GetBlobDetectionParams():
         dialog.destroy()
 
     button_frame = ttk.Frame(main_frame)
-    button_frame.pack(side=tk.BOTTOM, pady=10)
+    button_frame.pack(side=tk.BOTTOM, pady=10, fill=tk.X)
 
-    ttk.Button(button_frame, text="Continue", command=ok_clicked).pack(side=tk.LEFT, padx=5)
-    ttk.Button(button_frame, text="Cancel", command=cancel_clicked).pack(side=tk.LEFT, padx=5)
-
+    # Create buttons with explicit geometry management
+    continue_btn = ttk.Button(button_frame, text="Continue", command=ok_clicked)
+    continue_btn.pack(side=tk.LEFT, padx=5)
+    
+    cancel_btn = ttk.Button(button_frame, text="Cancel", command=cancel_clicked)
+    cancel_btn.pack(side=tk.LEFT, padx=5)
+    
+    # Ensure buttons are visible before waiting
+    dialog.update_idletasks()
+    button_frame.update_idletasks()
+    
+    # Force focus and ensure dialog is ready
+    dialog.after(10, lambda: dialog.focus_force())
+    
     dialog.wait_window()
 
     # Check if main dialog was cancelled
@@ -338,9 +355,15 @@ def GetBlobDetectionParams():
             constraint_dialog = tk.Toplevel()
             constraint_dialog.title("Constraints")
             constraint_dialog.geometry("400x300")
-            constraint_dialog.transient()
+            constraint_dialog.transient(root)  # Make transient to root
             constraint_dialog.grab_set()
             constraint_dialog.focus_set()
+            
+            # Enhanced dialog positioning
+            constraint_dialog.update_idletasks()
+            x = (constraint_dialog.winfo_screenwidth() // 2) - (constraint_dialog.winfo_reqwidth() // 2)
+            y = (constraint_dialog.winfo_screenheight() // 2) - (constraint_dialog.winfo_reqheight() // 2)
+            constraint_dialog.geometry(f"+{x}+{y}")
 
             constraint_result = [None]
 
@@ -421,12 +444,21 @@ def GetBlobDetectionParams():
 
             # Continue/Cancel buttons
             constraint_button_frame = ttk.Frame(constraint_frame)
-            constraint_button_frame.pack(side=tk.BOTTOM, pady=15)
+            constraint_button_frame.pack(side=tk.BOTTOM, pady=15, fill=tk.X)
 
-            ttk.Button(constraint_button_frame, text="Continue", command=constraint_ok_clicked).pack(side=tk.LEFT,
-                                                                                                     padx=5)
-            ttk.Button(constraint_button_frame, text="Cancel", command=constraint_cancel_clicked).pack(side=tk.LEFT,
-                                                                                                       padx=5)
+            # Create buttons with explicit geometry management
+            continue_constraint_btn = ttk.Button(constraint_button_frame, text="Continue", command=constraint_ok_clicked)
+            continue_constraint_btn.pack(side=tk.LEFT, padx=5)
+            
+            cancel_constraint_btn = ttk.Button(constraint_button_frame, text="Cancel", command=constraint_cancel_clicked)
+            cancel_constraint_btn.pack(side=tk.LEFT, padx=5)
+            
+            # Ensure buttons are visible before waiting
+            constraint_dialog.update_idletasks()
+            constraint_button_frame.update_idletasks()
+            
+            # Force focus and ensure dialog is ready
+            constraint_dialog.after(10, lambda: constraint_dialog.focus_force())
 
             constraint_dialog.wait_window()
 
@@ -1225,55 +1257,112 @@ def BatchHessianBlobs(images_dict, params=None):
                                         subPixelMult=subPixelMult, allowOverlap=allowOverlap,
                                         minH=minH, maxH=maxH, minA=minA, maxA=maxA, minV=minV, maxV=maxV)
 
-        # Store results for this image
+        # Store results for this image with reference to original image
+        if image_df_results is not None:
+            # Ensure original image is available for scaling info
+            if 'original' in image_df_results:
+                image_df_results['original_image'] = image_df_results['original']
+            else:
+                # Fallback: store original image reference
+                image_df_results['original_image'] = im
         image_results[image_name] = image_df_results
 
-        # Get wave references to the measurement waves
+        # Get wave references to the measurement waves with validation
         if image_df_results is None:
             print(f"   ERROR: Analysis failed for {image_name}")
             continue
 
+        # Validate all required measurement waves exist
+        required_waves = ['Heights', 'AvgHeights', 'Areas', 'Volumes', 'COM']
+        missing_waves = []
+        for wave_name in required_waves:
+            if wave_name not in image_df_results or image_df_results[wave_name] is None:
+                missing_waves.append(wave_name)
+                
+        if missing_waves:
+            print(f"   ERROR: Missing required waves in {image_name}: {missing_waves}")
+            continue
+            
         heights = image_df_results.get('Heights')
         avg_heights = image_df_results.get('AvgHeights')
         areas = image_df_results.get('Areas')
         volumes = image_df_results.get('Volumes')
         com = image_df_results.get('COM')  # Center of mass data
+        
+        # Additional validation that waves have data attributes
+        for wave_name, wave in [('Heights', heights), ('AvgHeights', avg_heights), 
+                               ('Areas', areas), ('Volumes', volumes), ('COM', com)]:
+            if not hasattr(wave, 'data') or wave.data is None:
+                print(f"   ERROR: Wave {wave_name} has no data attribute or data is None in {image_name}")
+                continue
 
         # Debug: Check what was returned from individual analysis
         print(f"   Individual analysis results for {image_name}:")
-        print(f"   - Heights: {len(heights.data) if heights else 'None'}")
-        print(f"   - Areas: {len(areas.data) if areas else 'None'}")
-        print(f"   - Volumes: {len(volumes.data) if volumes else 'None'}")
-        print(f"   - AvgHeights: {len(avg_heights.data) if avg_heights else 'None'}")
-        print(f"   - COM: {com.data.shape if com else 'None'}")
+        print(f"   - Heights: {len(heights.data) if heights and hasattr(heights, 'data') and heights.data is not None else 'None'}")
+        print(f"   - Areas: {len(areas.data) if areas and hasattr(areas, 'data') and areas.data is not None else 'None'}")
+        print(f"   - Volumes: {len(volumes.data) if volumes and hasattr(volumes, 'data') and volumes.data is not None else 'None'}")
+        print(f"   - AvgHeights: {len(avg_heights.data) if avg_heights and hasattr(avg_heights, 'data') and avg_heights.data is not None else 'None'}")
+        print(f"   - COM: {com.data.shape if com and hasattr(com, 'data') and com.data is not None else 'None'}")
 
+        # Validate data before concatenation
+        valid_data = True
+        for wave_name, wave in [('Heights', heights), ('AvgHeights', avg_heights), 
+                               ('Areas', areas), ('Volumes', volumes)]:
+            if not hasattr(wave, 'data') or wave.data is None or len(wave.data) == 0:
+                print(f"   WARNING: {wave_name} has no valid data for {image_name}")
+                valid_data = False
+                break
+                
+        # Special handling for COM data - can be empty but must have proper shape
+        if com and hasattr(com, 'data') and com.data is not None:
+            if len(com.data.shape) == 1 and len(com.data) == 0:
+                # Reshape empty 1D array to proper 2D shape
+                com.data = com.data.reshape(0, 2)
+            elif len(com.data.shape) != 2 or com.data.shape[1] != 2:
+                print(f"   ERROR: Invalid COM data shape {com.data.shape} for {image_name}")
+                valid_data = False
+        else:
+            print(f"   WARNING: COM data missing or invalid for {image_name}")
+            # Create empty COM array with proper shape
+            com = Wave(np.array([]).reshape(0, 2), "COM")
+            
         # Concatenate the measurements into the master wave
-        if len(heights.data) > 0:
+        if valid_data and len(heights.data) > 0:
             # Proper wave concatenation with robust error handling
             try:
                 # Use robust concatenation that handles empty arrays properly
                 if len(all_heights.data) == 0:
-                    all_heights.data = heights.data.copy()
-                    all_avg_heights.data = avg_heights.data.copy()
-                    all_areas.data = areas.data.copy()
-                    all_volumes.data = volumes.data.copy()
+                    # First image - initialize with proper dtype and shape
+                    all_heights.data = np.array(heights.data, dtype=np.float64)
+                    all_avg_heights.data = np.array(avg_heights.data, dtype=np.float64)
+                    all_areas.data = np.array(areas.data, dtype=np.float64)
+                    all_volumes.data = np.array(volumes.data, dtype=np.float64)
                     # Handle COM data carefully - ensure it's a 2D array
-                    if com and hasattr(com, 'data') and len(com.data) > 0:
-                        all_com.data = com.data.copy()
+                    if com and hasattr(com, 'data') and com.data is not None and len(com.data) > 0:
+                        all_com.data = np.array(com.data, dtype=np.float64).reshape(-1, 2)
                     else:
-                        all_com.data = np.array([]).reshape(0, 2)
+                        all_com.data = np.array([]).reshape(0, 2).astype(np.float64)
+                    print(f"   Initialized master arrays with {len(heights.data)} particles")
                 else:
-                    all_heights.data = np.concatenate([all_heights.data, heights.data])
-                    all_avg_heights.data = np.concatenate([all_avg_heights.data, avg_heights.data])
-                    all_areas.data = np.concatenate([all_areas.data, areas.data])
-                    all_volumes.data = np.concatenate([all_volumes.data, volumes.data])
+                    # Subsequent images - concatenate with validation
+                    try:
+                        all_heights.data = np.concatenate([all_heights.data, heights.data.astype(np.float64)])
+                        all_avg_heights.data = np.concatenate([all_avg_heights.data, avg_heights.data.astype(np.float64)])
+                        all_areas.data = np.concatenate([all_areas.data, areas.data.astype(np.float64)])
+                        all_volumes.data = np.concatenate([all_volumes.data, volumes.data.astype(np.float64)])
+                    except Exception as e:
+                        print(f"   ERROR: Failed to concatenate measurement data: {e}")
+                        continue
+                        
                     # Handle COM concatenation with proper error checking
-                    if com and hasattr(com, 'data') and len(com.data) > 0:
+                    if com and hasattr(com, 'data') and com.data is not None and len(com.data) > 0:
                         try:
-                            if len(all_com.data) == 0:
-                                all_com.data = com.data.copy()
+                            com_data_2d = np.array(com.data, dtype=np.float64).reshape(-1, 2)
+                            if all_com.data.shape[0] == 0:
+                                all_com.data = com_data_2d
                             else:
-                                all_com.data = np.vstack([all_com.data, com.data])
+                                all_com.data = np.vstack([all_com.data, com_data_2d])
+                            print(f"   Concatenated COM data: {len(com_data_2d)} new coordinates")
                         except Exception as e:
                             print(f"   WARNING: Failed to concatenate COM data: {e}")
                             print(f"   all_com shape: {all_com.data.shape}, com shape: {com.data.shape}")
@@ -1290,8 +1379,10 @@ def BatchHessianBlobs(images_dict, params=None):
                 print(f"   ERROR: Failed to concatenate results from {image_name}: {e}")
                 # Continue processing other images even if one fails
                 continue
-        else:
+        elif valid_data:
             print(f"   No particles found in {image_name}")
+        else:
+            print(f"   Skipping {image_name} due to invalid data")
 
         # Memory management for large batch jobs
         if i % 10 == 0 and i > 0:
@@ -1301,15 +1392,39 @@ def BatchHessianBlobs(images_dict, params=None):
     num_particles = len(all_heights.data)
     print(f"  Series complete. Total particles detected: {num_particles}")
 
-    # Ensure AllCOM has proper 2D shape even if empty
-    if len(all_com.data) == 0:
-        all_com.data = np.array([]).reshape(0, 2)
-        print(f"  AllCOM initialized as empty 2D array: shape {all_com.data.shape}")
-    else:
-        print(f"  AllCOM contains {len(all_com.data)} coordinate pairs: shape {all_com.data.shape}")
+    # Ensure all master arrays have proper dtypes and shapes
+    try:
+        # Ensure all measurement arrays are proper numpy arrays with float64 dtype
+        for wave_name, wave in [('AllHeights', all_heights), ('AllAreas', all_areas), 
+                               ('AllVolumes', all_volumes), ('AllAvgHeights', all_avg_heights)]:
+            if hasattr(wave, 'data') and wave.data is not None:
+                wave.data = np.array(wave.data, dtype=np.float64)
+                print(f"  {wave_name}: {len(wave.data)} values, dtype: {wave.data.dtype}")
+            else:
+                wave.data = np.array([], dtype=np.float64)
+                print(f"  {wave_name}: initialized as empty array")
+                
+        # Ensure AllCOM has proper 2D shape even if empty
+        if all_com.data is None or len(all_com.data) == 0:
+            all_com.data = np.array([]).reshape(0, 2).astype(np.float64)
+            print(f"  AllCOM initialized as empty 2D array: shape {all_com.data.shape}, dtype: {all_com.data.dtype}")
+        else:
+            all_com.data = np.array(all_com.data, dtype=np.float64).reshape(-1, 2)
+            print(f"  AllCOM contains {len(all_com.data)} coordinate pairs: shape {all_com.data.shape}, dtype: {all_com.data.dtype}")
+            
+    except Exception as e:
+        print(f"  ERROR: Failed to finalize data arrays: {e}")
+        raise
 
-    # Return series data folder path and all results
-    return {
+    # Final validation before returning results
+    print(f"\n  === BATCH RESULTS SUMMARY ===")
+    print(f"  Series folder: {series_df}")
+    print(f"  Total images processed: {num_images}")
+    print(f"  Total particles found: {num_particles}")
+    
+    # Validate all result data
+    result_validation = True
+    result_dict = {
         'series_folder': series_df,
         'Parameters': parameters,
         'AllHeights': all_heights,
@@ -1321,6 +1436,29 @@ def BatchHessianBlobs(images_dict, params=None):
         'numImages': num_images,
         'image_results': image_results  # Individual image results for detailed access
     }
+    
+    # Check that all required waves exist and have data
+    for key in ['Parameters', 'AllHeights', 'AllVolumes', 'AllAreas', 'AllAvgHeights', 'AllCOM']:
+        wave = result_dict[key]
+        if wave is None:
+            print(f"  ERROR: {key} is None!")
+            result_validation = False
+        elif not hasattr(wave, 'data'):
+            print(f"  ERROR: {key} has no data attribute!")
+            result_validation = False
+        elif wave.data is None:
+            print(f"  ERROR: {key}.data is None!")
+            result_validation = False
+        else:
+            print(f"  {key}: OK - shape {wave.data.shape}, dtype {wave.data.dtype}")
+            
+    if not result_validation:
+        raise ValueError("Batch results validation failed - missing or invalid data")
+        
+    print(f"  === VALIDATION PASSED ===")
+    
+    # Return series data folder path and all results
+    return result_dict
 
 
 def SaveBatchResults(batch_results, output_path="", save_format="igor"):
@@ -1348,146 +1486,261 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
         raise ValueError("No batch results provided to save")
 
     if not output_path:
-        output_path = os.getcwd()
+        output_path = Path.cwd()
         print(f"Using current directory: {output_path}")
+    else:
+        output_path = Path(output_path)
 
-    if not os.path.exists(output_path):
+    if not output_path.exists():
         print(f"ERROR: Output path does not exist: {output_path}")
         raise ValueError(f"Output path does not exist: {output_path}")
+        
+    # Check write permissions
+    if not os.access(str(output_path), os.W_OK):
+        print(f"ERROR: No write permission for output path: {output_path}")
+        raise PermissionError(f"No write permission for output path: {output_path}")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Create Series_X folder structure
     series_num = 1
     series_folder_name = f"Series_{series_num}"
-    while os.path.exists(os.path.join(output_path, series_folder_name)):
+    while (output_path / series_folder_name).exists():
         series_num += 1
         series_folder_name = f"Series_{series_num}"
 
-    series_path = os.path.join(output_path, series_folder_name)
+    series_path = output_path / series_folder_name
     print(f"Creating Series folder: {series_path}")
 
     try:
-        os.makedirs(series_path, exist_ok=True)
-        print(f"Series folder created successfully: {os.path.exists(series_path)}")
+        series_path.mkdir(parents=True, exist_ok=True)
+        print(f"Series folder created successfully: {series_path.exists()}")
     except Exception as e:
         print(f"ERROR: Failed to create Series folder: {e}")
         raise
 
     # Save Files in Series_X folder structure
     if save_format == "igor" or save_format == "txt":
-        # Save Parameters wave
-        params_file = os.path.join(series_path, "Parameters.txt")
-        with open(params_file, 'w') as f:
-            params = batch_results['Parameters'].data
+        # Save Parameters wave with validation
+        params_file = series_path / "Parameters.txt"
+        try:
+            with open(params_file, 'w') as f:
+                # Validate Parameters wave exists and has data
+                if 'Parameters' not in batch_results or batch_results['Parameters'] is None:
+                    print("ERROR: Parameters wave missing from batch results")
+                    raise ValueError("Parameters wave missing from batch results")
+                    
+                if not hasattr(batch_results['Parameters'], 'data') or batch_results['Parameters'].data is None:
+                    print("ERROR: Parameters wave has no data")
+                    raise ValueError("Parameters wave has no data")
+                    
+                params = batch_results['Parameters'].data
 
-            f.write(f"Parameters[0]= {{")
-            for i, value in enumerate(params):
-                if i > 0:
-                    f.write(",")
-                f.write(f"{value}")
-            f.write("}\n")
+                f.write(f"Parameters[0]= {{")
+                for i, value in enumerate(params):
+                    if i > 0:
+                        f.write(",")
+                    f.write(f"{value}")
+                f.write("}\n")
 
-            f.write("\n")
-            f.write("// Igor Pro HessianBlobs Parameters (13 values)\n")
-            f.write("// ===============================================\n")
-            f.write("// Parameters[0]  = scaleStart\n")
-            f.write("// Parameters[1]  = layers\n")
-            f.write("// Parameters[2]  = scaleFactor\n")
-            f.write("// Parameters[3]  = detHResponseThresh\n")
-            f.write("// Parameters[4]  = particleType\n")
-            f.write("// Parameters[5]  = subPixelMult\n")
-            f.write("// Parameters[6]  = allowOverlap\n")
-            f.write("// Parameters[7]  = minH\n")
-            f.write("// Parameters[8]  = maxH\n")
-            f.write("// Parameters[9]  = minA\n")
-            f.write("// Parameters[10] = maxA\n")
-            f.write("// Parameters[11] = minV\n")
-            f.write("// Parameters[12] = maxV\n")
-            f.write(f"//\n")
-            f.write(f"// Batch Analysis Summary:\n")
-            f.write(f"// Total Images: {batch_results['numImages']}\n")
-            f.write(f"// Total Particles: {batch_results['numParticles']}\n")
+                f.write("\n")
+                f.write("// Igor Pro HessianBlobs Parameters (13 values)\n")
+                f.write("// ===============================================\n")
+                f.write("// Parameters[0]  = scaleStart\n")
+                f.write("// Parameters[1]  = layers\n")
+                f.write("// Parameters[2]  = scaleFactor\n")
+                f.write("// Parameters[3]  = detHResponseThresh\n")
+                f.write("// Parameters[4]  = particleType\n")
+                f.write("// Parameters[5]  = subPixelMult\n")
+                f.write("// Parameters[6]  = allowOverlap\n")
+                f.write("// Parameters[7]  = minH\n")
+                f.write("// Parameters[8]  = maxH\n")
+                f.write("// Parameters[9]  = minA\n")
+                f.write("// Parameters[10] = maxA\n")
+                f.write("// Parameters[11] = minV\n")
+                f.write("// Parameters[12] = maxV\n")
+                f.write(f"//\n")
+                f.write(f"// Batch Analysis Summary:\n")
+                f.write(f"// Total Images: {batch_results.get('numImages', 0)}\n")
+                f.write(f"// Total Particles: {batch_results.get('numParticles', 0)}\n")
+                f.write(f"//\n")
+                
+                # Include spatial scaling information if available
+                sample_image_result = next(iter(batch_results.get('image_results', {}).values()), None)
+                if sample_image_result and 'original_image' in sample_image_result:
+                    sample_image = sample_image_result['original_image']
+                    x_scale = sample_image.GetScale('x')
+                    y_scale = sample_image.GetScale('y')
+                    f.write(f"// Spatial Scaling Information:\n")
+                    f.write(f"// X Scale: {x_scale['delta']} {x_scale['units']}/pixel, offset: {x_scale['offset']}\n")
+                    f.write(f"// Y Scale: {y_scale['delta']} {y_scale['units']}/pixel, offset: {y_scale['offset']}\n")
+                    f.write(f"// Measurement units: Area in {x_scale['units']}², Volume in {x_scale['units']}²*intensity\n")
+                else:
+                    f.write(f"// Spatial Scaling Information: Pixel units (no physical calibration)\n")
+                
+                # Ensure file was written
+                f.flush()
+            
+        except Exception as e:
+            print(f"ERROR: Failed to write Parameters.txt: {e}")
+            raise
+            
+        # Verify Parameters file was written
+        params_file_size = params_file.stat().st_size
+        print(f"Successfully wrote Parameters.txt ({params_file_size} bytes)")
+        if params_file_size == 0:
+            print("WARNING: Parameters.txt file is empty!")
+            raise ValueError("Parameters.txt file was not written correctly")
 
-        measurements = {
-            'AllHeights': batch_results['AllHeights'],
-            'AllVolumes': batch_results['AllVolumes'],
-            'AllAreas': batch_results['AllAreas'],
-            'AllAvgHeights': batch_results['AllAvgHeights']
-        }
+        # Validate measurement waves before processing
+        measurements = {}
+        required_measurements = ['AllHeights', 'AllVolumes', 'AllAreas', 'AllAvgHeights']
+        
+        for measure_name in required_measurements:
+            if measure_name not in batch_results:
+                print(f"ERROR: {measure_name} missing from batch results")
+                raise ValueError(f"Required measurement {measure_name} missing from batch results")
+                
+            wave = batch_results[measure_name]
+            if wave is None:
+                print(f"ERROR: {measure_name} wave is None")
+                raise ValueError(f"{measure_name} wave is None")
+                
+            if not hasattr(wave, 'data') or wave.data is None:
+                print(f"ERROR: {measure_name} wave has no data attribute or data is None")
+                raise ValueError(f"{measure_name} wave has no data")
+                
+            measurements[measure_name] = wave
 
         # Add AllCOM only if it exists and has valid data
         if 'AllCOM' in batch_results and batch_results['AllCOM'] is not None:
-            measurements['AllCOM'] = batch_results['AllCOM']
-            print(f"Including AllCOM in export with {len(batch_results['AllCOM'].data)} entries")
+            com_wave = batch_results['AllCOM']
+            if hasattr(com_wave, 'data') and com_wave.data is not None:
+                # Ensure COM data has proper 2D shape
+                if len(com_wave.data.shape) == 1 and len(com_wave.data) == 0:
+                    # Empty COM array - reshape to proper 2D
+                    com_wave.data = com_wave.data.reshape(0, 2)
+                elif len(com_wave.data.shape) == 2 and com_wave.data.shape[1] == 2:
+                    # Valid 2D COM data
+                    pass
+                else:
+                    print(f"WARNING: Invalid COM data shape {com_wave.data.shape}, skipping COM export")
+                    com_wave = None
+                    
+                if com_wave is not None:
+                    measurements['AllCOM'] = com_wave
+                    print(f"Including AllCOM in export with {len(com_wave.data)} entries")
+                else:
+                    print("WARNING: AllCOM data invalid, skipping COM export")
+            else:
+                print("WARNING: AllCOM wave has no data, skipping COM export")
         else:
             print("WARNING: AllCOM data missing from batch results, skipping COM export")
 
         for wave_name, wave in measurements.items():
-            wave_file = os.path.join(series_path, f"{wave_name}.txt")
-            with open(wave_file, 'w') as f:
-                # Use Igor Pro wave format with proper number formatting
-                if wave_name == 'AllCOM':
-                    print(f"Saving AllCOM with shape: {wave.data.shape}")
-                    try:
-                        if len(wave.data) == 0:
-                            # Handle empty COM data
+            wave_file = series_path / f"{wave_name}.txt"
+            print(f"Saving {wave_name} to {wave_file}")
+            
+            # Additional validation before writing
+            if wave is None:
+                print(f"ERROR: Wave {wave_name} is None!")
+                raise ValueError(f"Wave {wave_name} is None")
+            
+            if not hasattr(wave, 'data'):
+                print(f"ERROR: Wave {wave_name} has no data attribute!")
+                raise ValueError(f"Wave {wave_name} has no data attribute")
+            
+            if wave.data is None:
+                print(f"ERROR: Wave {wave_name} data is None!")
+                raise ValueError(f"Wave {wave_name} data is None")
+            
+            try:
+                with open(wave_file, 'w') as f:
+                    # Use Igor Pro wave format with proper number formatting
+                    if wave_name == 'AllCOM':
+                        print(f"Saving AllCOM with shape: {wave.data.shape}")
+                        try:
+                            if len(wave.data) == 0:
+                                # Handle empty COM data
+                                f.write(f"{wave_name}[0][0]= {{}}\n")
+                            else:
+                                f.write(f"{wave_name}[0][0]= {{")
+                                for i, row in enumerate(wave.data):
+                                    if i > 0:
+                                        f.write(",")
+                                    # Format COM coordinates
+                                    x_formatted = format_igor_number(float(row[0]))
+                                    y_formatted = format_igor_number(float(row[1]))
+                                    f.write(f"{{{x_formatted},{y_formatted}}}")
+                                f.write("}\n")
+                            print(f"Successfully saved AllCOM with {len(wave.data)} coordinate pairs")
+                        except Exception as e:
+                            print(f"ERROR saving AllCOM: {e}")
+                            print(f"AllCOM data type: {type(wave.data)}")
+                            print(f"AllCOM data shape: {wave.data.shape if hasattr(wave.data, 'shape') else 'No shape'}")
+                            # Fallback: save empty COM file
                             f.write(f"{wave_name}[0][0]= {{}}\n")
+                            print(f"Saved empty AllCOM file as fallback")
+                            raise  # Re-raise the exception after logging
+                    else:
+                        # Handle 1D measurement data
+                        if len(wave.data) == 0:
+                            # Handle empty measurement data
+                            f.write(f"{wave_name}[0]= {{}}\n")
+                            print(f"Saved empty {wave_name} file")
                         else:
-                            f.write(f"{wave_name}[0][0]= {{")
-                            for i, row in enumerate(wave.data):
+                            f.write(f"{wave_name}[0]= {{")
+                            for i, value in enumerate(wave.data):
                                 if i > 0:
                                     f.write(",")
-                                # Format COM coordinates
-                                x_formatted = format_igor_number(float(row[0]))
-                                y_formatted = format_igor_number(float(row[1]))
-                                f.write(f"{{{x_formatted},{y_formatted}}}")
+                                # Use Igor Pro number formatting with validation
+                                try:
+                                    formatted_value = format_igor_number(float(value))
+                                    f.write(formatted_value)
+                                except (ValueError, TypeError) as e:
+                                    print(f"WARNING: Invalid value in {wave_name}[{i}]: {value}, using 0")
+                                    f.write("0")
                             f.write("}\n")
-                        print(f"Successfully saved AllCOM with {len(wave.data)} coordinate pairs")
-                    except Exception as e:
-                        print(f"ERROR saving AllCOM: {e}")
-                        print(f"AllCOM data type: {type(wave.data)}")
-                        print(f"AllCOM data shape: {wave.data.shape if hasattr(wave.data, 'shape') else 'No shape'}")
-                        # Fallback: save empty COM file
-                        f.write(f"{wave_name}[0][0]= {{}}\n")
-                        print(f"Saved empty AllCOM file as fallback")
-                else:
-                    # Handle 1D measurement data
-                    f.write(f"{wave_name}[0]= {{")
-                    for i, value in enumerate(wave.data):
-                        if i > 0:
-                            f.write(",")
-                        # Use Igor Pro number formatting
-                        f.write(format_igor_number(value))
-                    f.write("}\n")
+                        
+            except Exception as e:
+                print(f"ERROR: Failed to write {wave_name}: {e}")
+                raise
 
         # Create consolidated Info file for ViewParticles compatibility
-        info_file = os.path.join(series_path, "Info.txt")
-        with open(info_file, 'w') as f:
-            # Create consolidated info array from all images
-            all_info_data = []
-            for image_name, results in batch_results['image_results'].items():
-                if 'info' in results and results['info'] is not None:
-                    info_data = results['info'].data
-                    if info_data.shape[0] > 0:
-                        all_info_data.append(info_data)
+        info_file = series_path / "Info.txt"
+        print(f"Creating consolidated Info file: {info_file}")
+        
+        try:
+            with open(info_file, 'w') as f:
+                # Create consolidated info array from all images
+                all_info_data = []
+                for image_name, results in batch_results['image_results'].items():
+                    if 'info' in results and results['info'] is not None:
+                        info_data = results['info'].data
+                        if info_data.shape[0] > 0:
+                            all_info_data.append(info_data)
 
-            if all_info_data:
-                # Concatenate all info data
-                consolidated_info = np.vstack(all_info_data)
+                if all_info_data:
+                    # Concatenate all info data
+                    consolidated_info = np.vstack(all_info_data)
 
-                # Write in Igor Pro wave format for ViewParticles compatibility
-                f.write("Info[0][0]= {")
-                for i, row in enumerate(consolidated_info):
-                    if i > 0:
-                        f.write(",")
-                    # Format each value in the row
-                    formatted_values = [format_igor_number(float(val)) for val in row]
-                    f.write("{" + ",".join(formatted_values) + "}")
-                f.write("}\n")
-            else:
-                # Empty info file
-                f.write("Info[0][0]= {}\n")
+                    # Write in Igor Pro wave format for ViewParticles compatibility
+                    f.write("Info[0][0]= {")
+                    for i, row in enumerate(consolidated_info):
+                        if i > 0:
+                            f.write(",")
+                        # Format each value in the row
+                        formatted_values = [format_igor_number(float(val)) for val in row]
+                        f.write("{" + ",".join(formatted_values) + "}")
+                    f.write("}\n")
+                else:
+                    # Empty info file
+                    f.write("Info[0][0]= {}\n")
+                
+                
+        except Exception as e:
+            print(f"ERROR: Failed to write Info.txt: {e}")
+            raise
 
         # Count files actually saved
         files_saved = 5  # Parameters, AllHeights, AllVolumes, AllAreas, AllAvgHeights
@@ -1497,12 +1750,16 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
 
         print(f"Saved {files_saved} files matching Igor Pro BatchHessianBlobs structure:")
         print(f"  - Parameters: Configuration and metadata")
-        print(f"  - AllHeights: {len(batch_results['AllHeights'].data)} values")
-        print(f"  - AllVolumes: {len(batch_results['AllVolumes'].data)} values")
-        print(f"  - AllAreas: {len(batch_results['AllAreas'].data)} values")
-        print(f"  - AllAvgHeights: {len(batch_results['AllAvgHeights'].data)} values")
-        if 'AllCOM' in batch_results and batch_results['AllCOM'] is not None:
-            print(f"  - AllCOM: {len(batch_results['AllCOM'].data)} coordinate pairs")
+        
+        # Safe access to measurement data lengths
+        for measure_name in ['AllHeights', 'AllVolumes', 'AllAreas', 'AllAvgHeights']:
+            if measure_name in measurements and hasattr(measurements[measure_name], 'data'):
+                print(f"  - {measure_name}: {len(measurements[measure_name].data)} values")
+            else:
+                print(f"  - {measure_name}: ERROR - no data")
+                
+        if 'AllCOM' in measurements:
+            print(f"  - AllCOM: {len(measurements['AllCOM'].data)} coordinate pairs")
         else:
             print(f"  - AllCOM: SKIPPED (no COM data available)")
         print(f"  - Info: Consolidated particle data for ViewParticles")
@@ -1676,10 +1933,10 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
     print(f"Batch results saved to: {series_path}")
     print(f"Format: {save_format}")
     print(f"Series folder created: {series_folder_name}")
-    print(f"Series folder exists: {os.path.exists(series_path)}")
-    print(f"Files in series folder: {os.listdir(series_path) if os.path.exists(series_path) else 'N/A'}")
+    print(f"Batch analysis exported successfully to {series_path}")
+        
     print(f"=== SAVE BATCH RESULTS END ===")
-    return series_path
+    return str(series_path)
 
 
 def SaveSingleImageResults(results, image_name, output_path="", save_format="igor"):
@@ -1695,6 +1952,7 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
     import os
     import datetime
     import numpy as np
+    from pathlib import Path
 
     print(f"=== SAVE SINGLE IMAGE DEBUG ===")
     print(f"Function called with:")
@@ -1709,23 +1967,32 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
         raise ValueError("No results provided to save")
 
     if not output_path:
-        output_path = os.getcwd()
+        output_path = Path.cwd()
         print(f"Using current directory: {output_path}")
+    else:
+        output_path = Path(output_path)
 
-    if not os.path.exists(output_path):
+    if not output_path.exists():
         print(f"ERROR: Output path does not exist: {output_path}")
         raise ValueError(f"Output path does not exist: {output_path}")
+        
+    # Check write permissions
+    if not os.access(str(output_path), os.W_OK):
+        print(f"ERROR: No write permission for output path: {output_path}")
+        raise PermissionError(f"No write permission for output path: {output_path}")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Create ImageName_Particles folder structure
-    folder_name = f"{image_name}_Particles"
-    full_path = os.path.join(output_path, folder_name)
+    clean_image_name = os.path.splitext(image_name)[0]
+    clean_image_name = "".join(c for c in clean_image_name if c.isalnum() or c in ('_', '-'))
+    folder_name = f"{clean_image_name}_Particles"
+    full_path = output_path / folder_name
     print(f"Creating folder: {full_path}")
 
     try:
-        os.makedirs(full_path, exist_ok=True)
-        print(f"Folder created successfully: {os.path.exists(full_path)}")
+        full_path.mkdir(parents=True, exist_ok=True)
+        print(f"Folder created successfully: {full_path.exists()}")
     except Exception as e:
         print(f"ERROR: Failed to create folder: {e}")
         raise
@@ -1751,53 +2018,90 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
         print(f"Saving {len(measurements)} measurement waves...")
 
         for wave_name, wave in measurements.items():
-            wave_file = os.path.join(full_path, f"{wave_name}.txt")
+            wave_file = full_path / f"{wave_name}.txt"
             print(f"Saving {wave_name} to {wave_file}")
 
             if wave is None:
                 print(f"ERROR: Wave {wave_name} is None!")
-                continue
+                raise ValueError(f"Wave {wave_name} is None")
 
             if not hasattr(wave, 'data'):
                 print(f"ERROR: Wave {wave_name} has no data attribute!")
-                continue
+                raise ValueError(f"Wave {wave_name} has no data attribute")
+                
+            if wave.data is None:
+                print(f"ERROR: Wave {wave_name} data is None!")
+                raise ValueError(f"Wave {wave_name} data is None")
 
             try:
                 with open(wave_file, 'w') as f:
                     if wave_name == 'COM':
-                        f.write(f"{wave_name}[0][0]= {{")
-                        for i, row in enumerate(wave.data):
-                            if i > 0:
-                                f.write(",")
-                            x_formatted = format_igor_number(float(row[0]))
-                            y_formatted = format_igor_number(float(row[1]))
-                            f.write(f"{{{x_formatted},{y_formatted}}}")
-                        f.write("}\n")
+                        if len(wave.data) == 0 or wave.data.shape[0] == 0:
+                            f.write(f"{wave_name}[0][0]= {{}}\n")
+                        else:
+                            # Ensure COM data has proper shape
+                            if len(wave.data.shape) != 2 or wave.data.shape[1] != 2:
+                                print(f"ERROR: Invalid COM shape {wave.data.shape}")
+                                raise ValueError(f"Invalid COM data shape {wave.data.shape}")
+                            f.write(f"{wave_name}[0][0]= {{")
+                            for i, row in enumerate(wave.data):
+                                if i > 0:
+                                    f.write(",")
+                                x_formatted = format_igor_number(float(row[0]))
+                                y_formatted = format_igor_number(float(row[1]))
+                                f.write(f"{{{x_formatted},{y_formatted}}}")
+                            f.write("}\n")
                     else:
-                        f.write(f"{wave_name}[0]= {{")
-                        for i, value in enumerate(wave.data):
-                            if i > 0:
-                                f.write(",")
-                            f.write(format_igor_number(float(value)))
-                        f.write("}\n")
-                print(f"Successfully wrote {wave_name} ({os.path.getsize(wave_file)} bytes)")
+                        if len(wave.data) == 0:
+                            f.write(f"{wave_name}[0]= {{}}\n")
+                        else:
+                            f.write(f"{wave_name}[0]= {{")
+                            for i, value in enumerate(wave.data):
+                                if i > 0:
+                                    f.write(",")
+                                try:
+                                    f.write(format_igor_number(float(value)))
+                                except (ValueError, TypeError) as e:
+                                    print(f"WARNING: Invalid value in {wave_name}[{i}]: {value}, using 0")
+                                    f.write("0")
+                            f.write("}\n")
+                            
             except Exception as e:
                 print(f"ERROR: Failed to write {wave_name}: {e}")
                 raise
 
         # Save Info.txt file for ViewParticles compatibility
-        info_file = os.path.join(full_path, "Info.txt")
+        info_file = full_path / "Info.txt"
+        
+        # Validate info data exists
+        if 'info' not in results or results['info'] is None:
+            print("ERROR: Info data missing from results")
+            raise ValueError("Info data missing from results")
+            
+        if not hasattr(results['info'], 'data') or results['info'].data is None:
+            print("ERROR: Info wave has no data")
+            raise ValueError("Info wave has no data")
+            
         info_data = results['info'].data
-        with open(info_file, 'w') as f:
-            f.write("Info[0][0]= {")
-            for i, row in enumerate(info_data):
-                if i > 0:
-                    f.write(",")
-                # Format each value in the row
-                formatted_values = [format_igor_number(float(val)) for val in row]
-                f.write("{" + ",".join(formatted_values) + "}")
-            f.write("}\n")
-        print(f"Successfully wrote Info.txt ({os.path.getsize(info_file)} bytes)")
+        
+        try:
+            with open(info_file, 'w') as f:
+                if len(info_data) == 0 or info_data.shape[0] == 0:
+                    f.write("Info[0][0]= {}\n")
+                else:
+                    f.write("Info[0][0]= {")
+                    for i, row in enumerate(info_data):
+                        if i > 0:
+                            f.write(",")
+                        # Format each value in the row
+                        formatted_values = [format_igor_number(float(val)) for val in row]
+                        f.write("{" + ",".join(formatted_values) + "}")
+                    f.write("}\n")
+                    
+                
+        except Exception as e:
+            print(f"ERROR: Failed to write Info.txt: {e}")
+            raise
 
         # Create individual particle folders (Particle_0, Particle_1, etc.)
         info_data = results['info'].data
@@ -1813,25 +2117,32 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
             f"Measurement wave sizes: Heights={len(heights_data)}, Areas={len(areas_data)}, Volumes={len(volumes_data)}, COM={len(com_data)}")
 
         for i in range(info_data.shape[0]):
-            particle_folder = os.path.join(full_path, f"Particle_{i}")
-            os.makedirs(particle_folder, exist_ok=True)
+            particle_folder = full_path / f"Particle_{i}"
+            try:
+                particle_folder.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                print(f"ERROR creating particle folder {i}: {e}")
+                continue
 
             # Save particle measurements in each particle folder with bounds checking
-            particle_info_file = os.path.join(particle_folder, "ParticleInfo.txt")
-            with open(particle_info_file, 'w') as f:
-                f.write(f"Particle {i} Information\n")
-                f.write(f"Height: {heights_data[i] if i < len(heights_data) else 'N/A'}\n")
-                f.write(f"Area: {areas_data[i] if i < len(areas_data) else 'N/A'}\n")
-                f.write(f"Volume: {volumes_data[i] if i < len(volumes_data) else 'N/A'}\n")
+            particle_info_file = particle_folder / "ParticleInfo.txt"
+            try:
+                with open(particle_info_file, 'w') as f:
+                    f.write(f"Particle {i} Information\n")
+                    f.write(f"Height: {heights_data[i] if i < len(heights_data) else 'N/A'}\n")
+                    f.write(f"Area: {areas_data[i] if i < len(areas_data) else 'N/A'}\n")
+                    f.write(f"Volume: {volumes_data[i] if i < len(volumes_data) else 'N/A'}\n")
 
-                # Safe COM access with bounds checking
-                if i < len(com_data) and len(com_data[i]) >= 2:
-                    f.write(f"Center: ({com_data[i][0]:.2f}, {com_data[i][1]:.2f})\n")
-                else:
-                    f.write("Center: N/A\n")
+                    # Safe COM access with bounds checking
+                    if i < len(com_data) and len(com_data[i]) >= 2:
+                        f.write(f"Center: ({com_data[i][0]:.2f}, {com_data[i][1]:.2f})\n")
+                    else:
+                        f.write("Center: N/A\n")
+                    
+            except Exception as e:
+                print(f"ERROR saving ParticleInfo.txt for particle {i}: {e}")
 
-        # Save Info wave in main folder
-        info_file = os.path.join(full_path, "Info.txt")
+        print(f"Single image analysis exported successfully to {full_path}")
         with open(info_file, 'w') as f:
             f.write("Particle Detection Results\n")
             f.write(f"Image: {image_name}\n")
