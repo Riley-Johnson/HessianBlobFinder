@@ -461,6 +461,40 @@ class HessianBlobGUI:
         
         return result[0]
 
+    def verify_saved_files(self, output_dir, image_name):
+        """Verify saved files and return size information"""
+        from pathlib import Path
+        import os
+        
+        clean_image_name = os.path.splitext(image_name)[0]
+        clean_image_name = "".join(c for c in clean_image_name if c.isalnum() or c in ('_', '-'))
+        results_folder = Path(output_dir) / f"{clean_image_name}_Particles"
+        
+        if not results_folder.exists():
+            return "No files created"
+            
+        files_info = []
+        expected_files = ["Heights.txt", "Areas.txt", "Volumes.txt", "AvgHeights.txt", "COM.txt", "Info.txt"]
+        
+        total_size = 0
+        created_count = 0
+        empty_count = 0
+        
+        for filename in expected_files:
+            filepath = results_folder / filename
+            if filepath.exists():
+                size = filepath.stat().st_size
+                total_size += size
+                created_count += 1
+                if size == 0:
+                    empty_count += 1
+                    
+        info_str = f"{created_count} files, {total_size} bytes"
+        if empty_count > 0:
+            info_str += f" (WARNING: {empty_count} empty files)"
+            
+        return info_str
+
     # Preprocessing methods
     def single_preprocess(self):
         """Run single preprocessing on current image"""
@@ -2220,13 +2254,24 @@ class HessianBlobGUI:
                 return
 
             # Auto-save all results without dialog
-            from main_functions import SaveSingleImageResults
+            from main_functions import SaveSingleImageResults, verify_analysis_results
+            
+            # Verify results before saving
+            if not verify_analysis_results(results):
+                messagebox.showerror("Save Error", "Analysis results failed validation. Cannot save.")
+                return
+                
             SaveSingleImageResults(results, image_name, output_dir, "igor")
+            
+            # Verify files were created and get byte counts
+            saved_files_info = self.verify_saved_files(output_dir, image_name)
+            
             self.log_message(f"Single image results automatically saved to {output_dir}!")
             messagebox.showinfo("Save Complete",
                                 f"Single image analysis results saved successfully!\n\n"
                                 f"Location: {output_dir}\n"
                                 f"Image: {image_name}\n"
+                                f"Files created: {saved_files_info}"
                                 f"Particles detected: {particle_count}")
 
         except Exception as e:

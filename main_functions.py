@@ -55,6 +55,437 @@ if not hasattr(np, 'complex'):
     np.complex = complex
 
 
+# Complete Igor Pro measurement functions
+def M_MinBoundary(im, mask):
+    """
+    Find minimum intensity value at particle boundary
+    Returns background level for subtraction
+    """
+    boundary_pixels = im.data[mask == 1]
+    if len(boundary_pixels) > 0:
+        return np.min(boundary_pixels)
+    else:
+        return 0.0
+
+def M_Height(im, mask, bg, negParticle=False):
+    """
+    Measure maximum height above background
+    For negative particles (holes), measure depth below background
+    """
+    masked_pixels = im.data[mask == 1]
+    if len(masked_pixels) == 0:
+        return 0.0
+    
+    if negParticle:
+        return bg - np.min(masked_pixels)
+    else:
+        return np.max(masked_pixels) - bg
+
+def M_Volume(im, mask, bg):
+    """
+    Compute actual volume by integrating intensity
+    """
+    if len(mask.shape) == 0 or np.sum(mask) == 0:
+        return 0.0
+    
+    # Sum all intensities within mask
+    total_intensity = np.sum(im.data[mask == 1])
+    # Subtract background contribution
+    pixel_count = np.sum(mask == 1)
+    volume = total_intensity - bg * pixel_count
+    
+    # Multiply by physical pixel area
+    x_scale = im.GetScale('x')
+    y_scale = im.GetScale('y')
+    pixel_area = x_scale['delta'] * y_scale['delta']
+    
+    return volume * pixel_area
+
+def M_CenterOfMass(im, mask, bg):
+    """
+    Calculate intensity-weighted center of mass
+    Returns complex number: Real=X, Imag=Y
+    """
+    if np.sum(mask) == 0:
+        return 0.0 + 1j * 0.0
+    
+    # Weight each pixel position by (intensity - bg)
+    y_indices, x_indices = np.where(mask == 1)
+    weights = im.data[y_indices, x_indices] - bg
+    
+    if np.sum(weights) == 0:
+        return 0.0 + 1j * 0.0
+    
+    weighted_x = np.sum(x_indices * weights) / np.sum(weights)
+    weighted_y = np.sum(y_indices * weights) / np.sum(weights)
+    
+    # Convert to physical coordinates
+    x_scale = im.GetScale('x')
+    y_scale = im.GetScale('y')
+    phys_x = x_scale['offset'] + weighted_x * x_scale['delta']
+    phys_y = y_scale['offset'] + weighted_y * y_scale['delta']
+    
+    return phys_x + 1j * phys_y
+
+def M_Area(mask, im):
+    """Count pixels in mask and convert to physical units"""
+    pixel_count = np.sum(mask == 1)
+    
+    # Get physical pixel area
+    x_scale = im.GetScale('x')
+    y_scale = im.GetScale('y')
+    pixel_area = x_scale['delta'] * y_scale['delta']
+    
+    return pixel_count * pixel_area
+
+def M_Perimeter(mask):
+    """Count edge pixels of mask"""
+    if np.sum(mask) == 0:
+        return 0
+    
+    # Find pixels in mask with at least one neighbor outside mask
+    from scipy import ndimage
+    
+    # Erode the mask by 1 pixel
+    eroded = ndimage.binary_erosion(mask)
+    
+    # Perimeter is original mask minus eroded mask
+    perimeter = mask.astype(int) - eroded.astype(int)
+    
+    return np.sum(perimeter)
+
+def BilinearInterpolate(data, x, y):
+    """
+    Bilinear interpolation at fractional coordinates
+    """
+    x0, y0 = int(x), int(y)
+    x1, y1 = x0 + 1, y0 + 1
+    
+    if x1 >= data.shape[1] or y1 >= data.shape[0] or x0 < 0 or y0 < 0:
+        return 0.0
+    
+    # Get the four corner values
+    Q11 = data[y0, x0]
+    Q12 = data[y1, x0] if y1 < data.shape[0] else Q11
+    Q21 = data[y0, x1] if x1 < data.shape[1] else Q11
+    Q22 = data[y1, x1] if (y1 < data.shape[0] and x1 < data.shape[1]) else Q11
+    
+    # Fractional parts
+    fx = x - x0
+    fy = y - y0
+    
+    # Bilinear interpolation
+    result = (Q11 * (1 - fx) * (1 - fy) + 
+              Q21 * fx * (1 - fy) + 
+              Q12 * (1 - fx) * fy + 
+              Q22 * fx * fy)
+    
+    return result
+
+def ExpandBoundary8(mask):
+    """Expand mask boundary by 1 pixel in 8-connectivity"""
+    from scipy import ndimage
+    
+    # 8-connected structuring element
+    struct = ndimage.generate_binary_structure(2, 2)
+    
+    # Dilate the mask
+    expanded = ndimage.binary_dilation(mask, structure=struct)
+    
+    return expanded.astype(int)
+
+def ExpandBoundary4(mask):
+    """Expand mask boundary by 1 pixel in 4-connectivity"""
+    from scipy import ndimage
+    
+    # 4-connected structuring element
+    struct = ndimage.generate_binary_structure(2, 1)
+    
+    # Dilate the mask
+    expanded = ndimage.binary_dilation(mask, structure=struct)
+    
+    return expanded.astype(int)
+
+def ScanlineFill8_LG(detH, mask, LG, p0, q0, thresh, fillVal=1):
+    """
+    8-connected flood fill based on LG values
+    """
+    if p0 < 0 or p0 >= mask.shape[1] or q0 < 0 or q0 >= mask.shape[0]:
+        return
+    
+    if mask[q0, p0] != 0:
+        return
+    
+    # Stack-based flood fill
+    stack = [(p0, q0)]
+    
+    while stack:
+        x, y = stack.pop()
+        
+        if x < 0 or x >= mask.shape[1] or y < 0 or y >= mask.shape[0]:
+            continue
+        
+        if mask[y, x] != 0:
+            continue
+        
+        if LG[y, x] < thresh:
+            continue
+        
+        mask[y, x] = fillVal
+        
+        # Add 8-connected neighbors
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                stack.append((x + dx, y + dy))
+
+def ScanlineFillEqual(edges, mask, p0, q0, fillVal=1):
+    """Fill region of equal values"""
+    if p0 < 0 or p0 >= mask.shape[1] or q0 < 0 or q0 >= mask.shape[0]:
+        return
+    
+    if mask[q0, p0] != 0:
+        return
+    
+    target_value = edges[q0, p0]
+    
+    # Stack-based flood fill
+    stack = [(p0, q0)]
+    
+    while stack:
+        x, y = stack.pop()
+        
+        if x < 0 or x >= mask.shape[1] or y < 0 or y >= mask.shape[0]:
+            continue
+        
+        if mask[y, x] != 0:
+            continue
+        
+        if edges[y, x] != target_value:
+            continue
+        
+        mask[y, x] = fillVal
+        
+        # Add 4-connected neighbors
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            stack.append((x + dx, y + dy))
+
+def ScaleToIndex(wave, scale_value, dimension):
+    """Convert physical scale to pixel index"""
+    scale_info = wave.GetScale(['x', 'y', 'z', 't'][dimension])
+    offset = scale_info['offset']
+    delta = scale_info['delta']
+    return int((scale_value - offset) / delta)
+
+def IndexToScale(wave, index, dimension):
+    """Convert pixel index to physical scale"""
+    scale_info = wave.GetScale(['x', 'y', 'z', 't'][dimension])
+    return scale_info['offset'] + index * scale_info['delta']
+
+def create_subpixel_mask(im, mask, subPixelMult, bg):
+    """
+    Create subpixel refined mask using bilinear interpolation
+    """
+    h, w = mask.shape
+    refined_h, refined_w = h * subPixelMult, w * subPixelMult
+    refined_mask = np.zeros((refined_h, refined_w), dtype=float)
+    
+    # For each subpixel position, interpolate the image value
+    for y in range(refined_h):
+        for x in range(refined_w):
+            # Convert subpixel coordinates to original coordinates
+            orig_y = y / subPixelMult
+            orig_x = x / subPixelMult
+            
+            # Get interpolated image value
+            interpolated_value = BilinearInterpolate(im.data, orig_x, orig_y)
+            
+            # Check if this position should be in the mask
+            # Use bilinear interpolation of the mask as well
+            mask_value = BilinearInterpolate(mask.astype(float), orig_x, orig_y)
+            
+            # Include in refined mask if original mask indicates particle presence
+            # and interpolated value is above background
+            if mask_value > 0.5 and interpolated_value > bg:
+                refined_mask[y, x] = 1.0
+    
+    return refined_mask
+
+def M_Height_SubPixel(im, refined_mask, bg, subPixelMult, negParticle=False):
+    """Measure height on subpixel refined mask"""
+    if np.sum(refined_mask) == 0:
+        return 0.0
+    
+    # Sample image at subpixel positions
+    h, w = refined_mask.shape
+    masked_values = []
+    
+    for y in range(h):
+        for x in range(w):
+            if refined_mask[y, x] > 0:
+                # Convert subpixel coordinates to original coordinates
+                orig_y = y / subPixelMult
+                orig_x = x / subPixelMult
+                
+                # Get interpolated value
+                value = BilinearInterpolate(im.data, orig_x, orig_y)
+                masked_values.append(value)
+    
+    if len(masked_values) == 0:
+        return 0.0
+    
+    if negParticle:
+        return bg - np.min(masked_values)
+    else:
+        return np.max(masked_values) - bg
+
+def M_Volume_SubPixel(im, refined_mask, bg, subPixelMult):
+    """Compute volume on subpixel refined mask"""
+    if np.sum(refined_mask) == 0:
+        return 0.0
+    
+    # Sample image at subpixel positions and integrate
+    h, w = refined_mask.shape
+    total_intensity = 0.0
+    pixel_count = 0
+    
+    for y in range(h):
+        for x in range(w):
+            if refined_mask[y, x] > 0:
+                # Convert subpixel coordinates to original coordinates
+                orig_y = y / subPixelMult
+                orig_x = x / subPixelMult
+                
+                # Get interpolated value
+                value = BilinearInterpolate(im.data, orig_x, orig_y)
+                total_intensity += value
+                pixel_count += 1
+    
+    if pixel_count == 0:
+        return 0.0
+    
+    # Subtract background and scale by subpixel area
+    volume = (total_intensity - bg * pixel_count) / (subPixelMult * subPixelMult)
+    
+    # Get physical pixel area
+    x_scale = im.GetScale('x')
+    y_scale = im.GetScale('y')
+    pixel_area = x_scale['delta'] * y_scale['delta']
+    
+    return volume * pixel_area
+
+def M_Area_SubPixel(refined_mask, im, subPixelMult):
+    """Calculate area from subpixel refined mask"""
+    pixel_count = np.sum(refined_mask > 0)
+    
+    # Scale down by subpixel factor squared
+    actual_pixel_count = pixel_count / (subPixelMult * subPixelMult)
+    
+    # Get physical pixel area
+    x_scale = im.GetScale('x')
+    y_scale = im.GetScale('y')
+    pixel_area = x_scale['delta'] * y_scale['delta']
+    
+    return actual_pixel_count * pixel_area
+
+def M_CenterOfMass_SubPixel(im, refined_mask, bg, subPixelMult):
+    """Calculate intensity-weighted center of mass on subpixel refined mask"""
+    if np.sum(refined_mask) == 0:
+        return 0.0 + 1j * 0.0
+    
+    h, w = refined_mask.shape
+    weighted_x_sum = 0.0
+    weighted_y_sum = 0.0
+    total_weight = 0.0
+    
+    for y in range(h):
+        for x in range(w):
+            if refined_mask[y, x] > 0:
+                # Convert subpixel coordinates to original coordinates
+                orig_y = y / subPixelMult
+                orig_x = x / subPixelMult
+                
+                # Get interpolated value
+                value = BilinearInterpolate(im.data, orig_x, orig_y)
+                weight = value - bg
+                
+                if weight > 0:
+                    weighted_x_sum += orig_x * weight
+                    weighted_y_sum += orig_y * weight
+                    total_weight += weight
+    
+    if total_weight == 0:
+        return 0.0 + 1j * 0.0
+    
+    com_x = weighted_x_sum / total_weight
+    com_y = weighted_y_sum / total_weight
+    
+    # Convert to physical coordinates
+    x_scale = im.GetScale('x')
+    y_scale = im.GetScale('y')
+    phys_x = x_scale['offset'] + com_x * x_scale['delta']
+    phys_y = y_scale['offset'] + com_y * y_scale['delta']
+    
+    return phys_x + 1j * phys_y
+
+def verify_analysis_results(results):
+    """
+    Verify analysis results data integrity
+    
+    Parameters:
+    results : dict - Analysis results dictionary
+    
+    Returns:
+    bool - True if all checks pass
+    """
+    if not results:
+        return False
+        
+    required_keys = ['Heights', 'Areas', 'Volumes', 'AvgHeights', 'COM', 'info']
+    for key in required_keys:
+        if key not in results:
+            return False
+        if results[key] is None:
+            return False
+        if not hasattr(results[key], 'data'):
+            return False
+        if results[key].data is None:
+            return False
+            
+    # Check dimension consistency
+    measurement_keys = ['Heights', 'Areas', 'Volumes', 'AvgHeights']
+    if len(results['Heights'].data) > 0:
+        expected_length = len(results['Heights'].data)
+        for key in measurement_keys:
+            if len(results[key].data) != expected_length:
+                return False
+                
+        # COM should be Nx2
+        if len(results['COM'].data) > 0:
+            if len(results['COM'].data) != expected_length:
+                return False
+            if len(results['COM'].data.shape) != 2 or results['COM'].data.shape[1] != 2:
+                return False
+                
+        # Info should match particle count
+        if len(results['info'].data) > 0:
+            if len(results['info'].data) != expected_length:
+                return False
+                
+    # Check numerical ranges
+    for key in measurement_keys:
+        data = results[key].data
+        if len(data) > 0:
+            if not np.all(np.isfinite(data)):
+                return False
+            if key in ['Heights', 'Areas', 'Volumes', 'AvgHeights']:
+                if np.any(data < 0):
+                    return False
+                    
+    return True
+
+
 def Duplicate(source_wave, new_name):
     """
     Create a duplicate of a wave
@@ -81,29 +512,39 @@ def ExtractBlobInfo(SS_MAXMAP, SS_MAXSCALEMAP, min_response, subPixelMult=1, all
 
     if len(valid_pixels[0]) == 0:
         print("No blobs found above threshold")
-        empty_info = Wave(np.zeros((0, 13)), "info")
+        empty_info = Wave(np.zeros((0, 15)), "info")
         return empty_info
 
     num_blobs = len(valid_pixels[0])
-    blob_info = np.zeros((num_blobs, 13))
+    blob_info = np.zeros((num_blobs, 15))
 
     print(f"Found {num_blobs} candidate blobs")
 
     for idx, (i, j) in enumerate(zip(valid_pixels[0], valid_pixels[1])):
         # Get blob information
-        x_coord = j  # Column index -> x coordinate
-        y_coord = i  # Row index -> y coordinate
+        x_coord = j  # Column index -> x coordinate (P_Seed)
+        y_coord = i  # Row index -> y coordinate (Q_Seed)
         response = SS_MAXMAP.data[i, j]
         scale = SS_MAXSCALEMAP.data[i, j] if SS_MAXSCALEMAP is not None else 1.0
 
         radius = np.sqrt(2 * scale)
 
-        blob_info[idx, 0] = x_coord  # X position
-        blob_info[idx, 1] = y_coord  # Y position
-        blob_info[idx, 2] = radius  # Radius
-        blob_info[idx, 3] = response  # Response strength
-        blob_info[idx, 4] = scale  # Scale
-        # Other columns can be filled with additional measurements
+        # Fill 15-column Igor Pro Info wave structure
+        blob_info[idx, 0] = x_coord          # P_Seed (x position)
+        blob_info[idx, 1] = y_coord          # Q_Seed (y position)
+        blob_info[idx, 2] = 1                # numPixels (initial estimate)
+        blob_info[idx, 3] = response         # maxBlobStrength
+        blob_info[idx, 4] = max(0, x_coord-int(radius))  # pStart
+        blob_info[idx, 5] = min(SS_MAXMAP.data.shape[1]-1, x_coord+int(radius))  # pStop
+        blob_info[idx, 6] = max(0, y_coord-int(radius))  # qStart  
+        blob_info[idx, 7] = min(SS_MAXMAP.data.shape[0]-1, y_coord+int(radius))  # qStop
+        blob_info[idx, 8] = scale            # scale
+        blob_info[idx, 9] = radius           # radius
+        blob_info[idx, 10] = 1               # inBounds (will be updated later)
+        blob_info[idx, 11] = 0               # height (will be measured later)
+        blob_info[idx, 12] = 0               # volume (will be measured later)
+        blob_info[idx, 13] = 0               # area (will be measured later)
+        blob_info[idx, 14] = 0               # particleNum (will be assigned later)
 
     # Filter overlapping blobs if not allowed
     if allowOverlap == 0:
@@ -229,6 +670,8 @@ def igor_otsu_threshold(detH, LG, particleType, maxCurvatureRatio):
 
 def GetBlobDetectionParams():
     """Get blob detection parameters from user"""
+    import platform
+    
     # Create parameter dialog
     root = tk.Tk()
     root.withdraw()  # Hide main window
@@ -236,20 +679,26 @@ def GetBlobDetectionParams():
     dialog = tk.Toplevel()
     dialog.title("Hessian Blob Parameters")
     dialog.geometry("700x400")
-    dialog.transient(root)  # Make transient to root instead of None
+    dialog.transient(root)
     dialog.grab_set()
     dialog.focus_set()
     
-    # Enhanced dialog visibility for all platforms
+    # Platform-specific dialog handling
     dialog.update_idletasks()
     x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_reqwidth() // 2)
     y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_reqheight() // 2)
     dialog.geometry(f"+{x}+{y}")
     
-    # Make dialog more visible
-    dialog.lift()  # Bring to front
-    dialog.attributes('-topmost', True)  # Keep on top temporarily
-    dialog.after(100, lambda: dialog.attributes('-topmost', False))  # Remove topmost after 100ms
+    # Platform-specific visibility adjustments
+    if platform.system() == "Darwin":  # macOS
+        dialog.attributes('-topmost', True)
+        dialog.lift()
+        dialog.after(200, lambda: dialog.attributes('-topmost', False))
+        dialog.focus_force()
+    else:
+        dialog.lift()
+        dialog.attributes('-topmost', True)
+        dialog.after(100, lambda: dialog.attributes('-topmost', False))
 
     result = [None]
 
@@ -992,8 +1441,11 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
     mapMax = Duplicate(im, "mapMax")
     mapMax.data = np.zeros(im.data.shape)
 
-    # Initialize info wave for particle information
-    info = Wave(np.zeros((1000, 13)), "info")
+    # Initialize 15-column info wave for particle information (exact Igor Pro structure)
+    # Columns: 0=P_Seed, 1=Q_Seed, 2=numPixels, 3=maxBlobStrength, 4=pStart, 5=pStop, 
+    #         6=qStart, 7=qStop, 8=scale, 9=radius, 10=inBounds, 11=height, 12=volume, 
+    #         13=area, 14=particleNum
+    info = Wave(np.zeros((1000, 15)), "info")
 
     # STEP 5: Find blobs
     print("Finding blobs with computed detectors...")
@@ -1052,8 +1504,17 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
 
     # Variables for particle measurement calculations
     accepted_particles = 0
+    
+    # Initialize 3D mapNum array for particle assignment tracking
+    # This is critical for Igor Pro compatibility and proper particle boundary detection
+    if subPixelMult > 1:
+        mapNum_data = np.zeros((im.data.shape[0] * subPixelMult, 
+                               im.data.shape[1] * subPixelMult, 
+                               layers), dtype=int)
+    else:
+        mapNum_data = np.zeros((im.data.shape[0], im.data.shape[1], layers), dtype=int)
 
-    # Process each potential particle
+    # Process each potential particle (backward iteration like Igor Pro)
     for i in range(numPotentialParticles - 1, -1, -1):
 
         # Skip overlapping particles if not allowed
@@ -1069,52 +1530,105 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
         # Consider boundary particles
         allowBoundaryParticles = 1  # Hard coded parameter
         if (allowBoundaryParticles == 0 and
-                (info.data[i, 4] <= 2 or info.data[i, 5] >= im.data.shape[0] - 3 or
-                 info.data[i, 6] <= 2 or info.data[i, 7] >= im.data.shape[1] - 3)):
+                (info.data[i, 4] <= 2 or info.data[i, 5] >= im.data.shape[1] - 3 or
+                 info.data[i, 6] <= 2 or info.data[i, 7] >= im.data.shape[0] - 3)):
             continue
 
-        # Extract particle region
+        # Extract particle region bounds
         p_start, p_stop = int(info.data[i, 4]), int(info.data[i, 5])
         q_start, q_stop = int(info.data[i, 6]), int(info.data[i, 7])
+        
+        # Get seed position and scale layer
+        p_seed = int(info.data[i, 0])
+        q_seed = int(info.data[i, 1])
+        scale_layer = int(info.data[i, 8]) if info.data[i, 8] < layers else layers - 1
 
-        # Calculate basic measurements
-        particle_area = info.data[i, 2]  # numPixels from Info wave
-        particle_height = info.data[i, 3]  # maximum blob strength
+        # Create mask for this particle using flood fill
+        mask = np.zeros(im.data.shape, dtype=int)
+        
+        # Perform flood fill from seed position using LG threshold
+        if (0 <= p_seed < im.data.shape[1] and 0 <= q_seed < im.data.shape[0] and
+            0 <= scale_layer < LG.data.shape[2]):
+            
+            # Get threshold for this scale layer
+            lg_thresh = np.sqrt(info.data[i, 3])  # Square root of blob strength
+            
+            # 8-connected flood fill based on LG values
+            ScanlineFill8_LG(detH, mask, LG.data[:, :, scale_layer], 
+                            p_seed, q_seed, lg_thresh, fillVal=1)
+        
+        # Calculate actual measurements using Igor Pro functions
+        if np.sum(mask) > 0:
+            # Get background level
+            bg = M_MinBoundary(im, mask)
+            
+            # Subpixel refinement if enabled
+            if subPixelMult > 1:
+                # Create subpixel refined mask using bilinear interpolation
+                refined_mask = create_subpixel_mask(im, mask, subPixelMult, bg)
+                
+                # Measure properties on refined mask
+                particle_height = M_Height_SubPixel(im, refined_mask, bg, subPixelMult, negParticle=(particleType == -1))
+                particle_volume = M_Volume_SubPixel(im, refined_mask, bg, subPixelMult)
+                particle_area = M_Area_SubPixel(refined_mask, im, subPixelMult)
+                particle_com = M_CenterOfMass_SubPixel(im, refined_mask, bg, subPixelMult)
+                particle_perimeter = M_Perimeter(mask)  # Perimeter uses original mask
+                
+                # Store refined mask for individual particle folders
+                mask_for_storage = refined_mask
+            else:
+                # Standard pixel-level measurements
+                particle_height = M_Height(im, mask, bg, negParticle=(particleType == -1))
+                particle_volume = M_Volume(im, mask, bg)
+                particle_area = M_Area(mask, im)
+                particle_com = M_CenterOfMass(im, mask, bg)
+                particle_perimeter = M_Perimeter(mask)
+                
+                mask_for_storage = mask
+            
+            # Update info wave with actual measurements
+            info.data[i, 2] = np.sum(mask)  # numPixels (actual count from original mask)
+            info.data[i, 11] = particle_height  # height
+            info.data[i, 12] = particle_volume  # volume  
+            info.data[i, 13] = particle_area    # area
+            
+            # Average height calculation
+            avg_height = particle_volume / particle_area if particle_area > 0 else 0
+            
+            # Check constraints with actual measurements
+            if (particle_height < minH or particle_height > maxH or
+                particle_area < minA or particle_area > maxA or
+                particle_volume < minV or particle_volume > maxV):
+                continue
+                
+            # Particle accepted - store measurements
+            heights.data[accepted_particles] = particle_height
+            areas.data[accepted_particles] = particle_area
+            volumes.data[accepted_particles] = particle_volume
+            avg_heights.data[accepted_particles] = avg_height
+            com.data[accepted_particles, 0] = Real(particle_com)  # X component
+            com.data[accepted_particles, 1] = Imag(particle_com)  # Y component
 
-        # Simple volume calculation
-        particle_volume = particle_area * particle_height
+            # Mark particle as accepted in info wave
+            info.data[i, 14] = accepted_particles + 1
+            
+            # Update mapNum with particle assignment (use original mask for mapNum)
+            mask_indices = np.where(mask == 1)
+            for y_idx, x_idx in zip(mask_indices[0], mask_indices[1]):
+                if (0 <= y_idx < mapNum_data.shape[0] and 
+                    0 <= x_idx < mapNum_data.shape[1]):
+                    mapNum_data[y_idx, x_idx, scale_layer] = accepted_particles + 1
 
-        # Center of mass
-        com_x = info.data[i, 0]  # P Seed
-        com_y = info.data[i, 1]  # Q Seed
+            # Store both original and refined masks for later use
+            if subPixelMult > 1:
+                # Store refined mask for this particle
+                setattr(mask_for_storage, f'_particle_{accepted_particles}_refined', True)
+                setattr(mask_for_storage, f'_subPixelMult', subPixelMult)
 
-        # Average height
-        avg_height = particle_height * 0.7
-
-        # Check height constraints
-        if particle_height < minH or particle_height > maxH:
+            accepted_particles += 1
+        else:
+            # No pixels found in flood fill - particle rejected
             continue
-
-        # Check area constraints
-        if particle_area < minA or particle_area > maxA:
-            continue
-
-        # Check volume constraints
-        if particle_volume < minV or particle_volume > maxV:
-            continue
-
-        # Particle accepted
-        heights.data[accepted_particles] = particle_height
-        areas.data[accepted_particles] = particle_area
-        volumes.data[accepted_particles] = particle_volume
-        avg_heights.data[accepted_particles] = avg_height
-        com.data[accepted_particles, 0] = com_x
-        com.data[accepted_particles, 1] = com_y
-
-        # Mark particle as accepted
-        info.data[i, 14] = accepted_particles + 1
-
-        accepted_particles += 1
 
     # Resize measurement waves to accepted particles only
     if accepted_particles < numPotentialParticles:
@@ -1124,6 +1638,57 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
         avg_heights.data = avg_heights.data[:accepted_particles]
         com.data = com.data[:accepted_particles, :]
         print(f"Applied constraints: {accepted_particles} particles accepted out of {numPotentialParticles}")
+
+    # Create mapNum wave from 3D array
+    mapNum.data = np.sum(mapNum_data, axis=2)  # Collapse 3D to 2D for visualization
+    
+    # Create ParticleMap for visualization (Igor Pro compatibility)
+    particle_map = Duplicate(im, "ParticleMap")
+    particle_map.data = mapNum.data.astype(float)
+    
+    # Create individual particle folders and waves (Igor Pro style)
+    particle_folders = {}
+    for p in range(accepted_particles):
+        particle_num = p + 1
+        folder_name = f"Particle_{particle_num}"
+        
+        # Find this particle's mask from mapNum
+        particle_mask = (mapNum.data == particle_num).astype(int)
+        
+        # Create individual particle waves
+        particle_wave = Duplicate(im, f"Particle_{particle_num}")
+        mask_wave = Wave(particle_mask, f"Mask_{particle_num}")
+        
+        # Copy scaling to individual waves  
+        for axis in ['x', 'y']:
+            scale_info = im.GetScale(axis)
+            particle_wave.SetScale(axis, scale_info['offset'], scale_info['delta'], scale_info['units'])
+            mask_wave.SetScale(axis, scale_info['offset'], scale_info['delta'], scale_info['units'])
+        
+        # Create subpixel waves if subpixel refinement was used
+        if subPixelMult > 1:
+            # Create subpixel refined versions
+            subpixel_particle = Duplicate(im, f"Particle_{particle_num}_SubPixel")
+            subpixel_mask = Wave(particle_mask, f"Mask_{particle_num}_SubPixel")  # Placeholder
+            
+            # Set subpixel scaling (finer resolution)
+            for axis in ['x', 'y']:
+                scale_info = im.GetScale(axis)
+                subpixel_delta = scale_info['delta'] / subPixelMult
+                subpixel_particle.SetScale(axis, scale_info['offset'], subpixel_delta, scale_info['units'])
+                subpixel_mask.SetScale(axis, scale_info['offset'], subpixel_delta, scale_info['units'])
+            
+            particle_folders[folder_name] = {
+                'particle': particle_wave,
+                'mask': mask_wave,
+                'particle_subpixel': subpixel_particle,
+                'mask_subpixel': subpixel_mask
+            }
+        else:
+            particle_folders[folder_name] = {
+                'particle': particle_wave,
+                'mask': mask_wave
+            }
 
     # Return data folder path and all waves
 
@@ -1149,6 +1714,12 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
         'Volumes': volumes,
         'AvgHeights': avg_heights,
         'COM': com,
+
+        # Particle assignment and visualization
+        'mapNum': mapNum,
+        'ParticleMap': particle_map,
+        'mapNum3D': Wave(mapNum_data, "mapNum3D"),  # Full 3D array
+        'particle_folders': particle_folders,
 
         # Parameters and metadata
         'threshold': minResponse,
@@ -1930,12 +2501,15 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
         print(f"Unsupported save format: {save_format}. Using Igor format.")
 
     print(f"=== SAVE BATCH RESULTS COMPLETE ===")
-    print(f"Batch results saved to: {series_path}")
-    print(f"Format: {save_format}")
-    print(f"Series folder created: {series_folder_name}")
-    print(f"Batch analysis exported successfully to {series_path}")
-        
-    print(f"=== SAVE BATCH RESULTS END ===")
+    # Final verification with actual byte counts
+    created_files = list(series_path.rglob("*.txt"))
+    total_size = sum(f.stat().st_size for f in created_files)
+    empty_files = [f for f in created_files if f.stat().st_size == 0]
+    
+    if empty_files:
+        print(f"WARNING: {len(empty_files)} empty files created")
+    
+    print(f"Batch analysis saved: {len(created_files)} files, {total_size} bytes")
     return str(series_path)
 
 
@@ -2039,9 +2613,7 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
                         if len(wave.data) == 0 or wave.data.shape[0] == 0:
                             f.write(f"{wave_name}[0][0]= {{}}\n")
                         else:
-                            # Ensure COM data has proper shape
                             if len(wave.data.shape) != 2 or wave.data.shape[1] != 2:
-                                print(f"ERROR: Invalid COM shape {wave.data.shape}")
                                 raise ValueError(f"Invalid COM data shape {wave.data.shape}")
                             f.write(f"{wave_name}[0][0]= {{")
                             for i, row in enumerate(wave.data):
@@ -2059,16 +2631,16 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
                             for i, value in enumerate(wave.data):
                                 if i > 0:
                                     f.write(",")
-                                try:
-                                    f.write(format_igor_number(float(value)))
-                                except (ValueError, TypeError) as e:
-                                    print(f"WARNING: Invalid value in {wave_name}[{i}]: {value}, using 0")
-                                    f.write("0")
+                                f.write(format_igor_number(float(value)))
                             f.write("}\n")
                             
+                # Verify file was written
+                file_size = wave_file.stat().st_size
+                if file_size == 0:
+                    raise ValueError(f"{wave_name} file is empty after write")
+                    
             except Exception as e:
-                print(f"ERROR: Failed to write {wave_name}: {e}")
-                raise
+                raise ValueError(f"Failed to write {wave_name}: {e}")
 
         # Save Info.txt file for ViewParticles compatibility
         info_file = full_path / "Info.txt"
@@ -2093,15 +2665,17 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
                     for i, row in enumerate(info_data):
                         if i > 0:
                             f.write(",")
-                        # Format each value in the row
                         formatted_values = [format_igor_number(float(val)) for val in row]
                         f.write("{" + ",".join(formatted_values) + "}")
                     f.write("}\n")
                     
+            # Verify Info file was written
+            info_file_size = info_file.stat().st_size
+            if info_file_size == 0:
+                raise ValueError("Info.txt file is empty after write")
                 
         except Exception as e:
-            print(f"ERROR: Failed to write Info.txt: {e}")
-            raise
+            raise ValueError(f"Failed to write Info.txt: {e}")
 
         # Create individual particle folders (Particle_0, Particle_1, etc.)
         info_data = results['info'].data
@@ -2249,8 +2823,15 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
     print(f"=== SAVE SINGLE IMAGE COMPLETE ===")
     print(f"Single image results saved to: {full_path}")
     print(f"Folder exists: {os.path.exists(full_path)}")
-    print(f"Files in folder: {os.listdir(full_path) if os.path.exists(full_path) else 'N/A'}")
-    print(f"=== SAVE SINGLE IMAGE END ===")
+    # Final verification with actual byte counts
+    created_files = list(full_path.rglob("*.txt"))
+    total_size = sum(f.stat().st_size for f in created_files)
+    empty_files = [f for f in created_files if f.stat().st_size == 0]
+    
+    if empty_files:
+        print(f"WARNING: {len(empty_files)} empty files created")
+    
+    print(f"Single image analysis saved: {len(created_files)} files, {total_size} bytes")
     return full_path
 
 
