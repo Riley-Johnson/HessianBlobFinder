@@ -672,33 +672,56 @@ def GetBlobDetectionParams():
     """Get blob detection parameters from user"""
     import platform
     
-    # Create parameter dialog
-    root = tk.Tk()
-    root.withdraw()  # Hide main window
+    # Create parameter dialog with enhanced cross-platform support
+    try:
+        # Try to use existing root if available
+        root = tk._default_root
+        if root is None:
+            root = tk.Tk()
+            root.withdraw()  # Hide main window
+    except:
+        root = tk.Tk()
+        root.withdraw()  # Hide main window
 
-    dialog = tk.Toplevel()
+    dialog = tk.Toplevel(root)
     dialog.title("Hessian Blob Parameters")
-    dialog.geometry("700x400")
+    dialog.geometry("700x450")  # Slightly taller to ensure button visibility
+    dialog.resizable(True, True)  # Allow resizing
     dialog.transient(root)
     dialog.grab_set()
-    dialog.focus_set()
     
-    # Platform-specific dialog handling
+    # Enhanced platform-specific dialog handling
+    dialog.update_idletasks()
+    
+    # Center dialog on screen
+    dialog.geometry("700x450")
     dialog.update_idletasks()
     x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_reqwidth() // 2)
     y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_reqheight() // 2)
     dialog.geometry(f"+{x}+{y}")
     
-    # Platform-specific visibility adjustments
-    if platform.system() == "Darwin":  # macOS
+    # Platform-specific visibility adjustments with enhanced handling
+    system = platform.system()
+    if system == "Darwin":  # macOS
         dialog.attributes('-topmost', True)
         dialog.lift()
-        dialog.after(200, lambda: dialog.attributes('-topmost', False))
         dialog.focus_force()
-    else:
+        dialog.after(300, lambda: dialog.attributes('-topmost', False))
+        dialog.after(50, lambda: dialog.focus_set())
+    elif system == "Windows":
         dialog.lift()
         dialog.attributes('-topmost', True)
+        dialog.focus_force()
         dialog.after(100, lambda: dialog.attributes('-topmost', False))
+        # Additional Windows-specific handling for Python terminal
+        dialog.after(50, lambda: dialog.focus_set())
+        dialog.after(100, lambda: dialog.lift())
+    else:  # Linux and others
+        dialog.lift()
+        dialog.attributes('-topmost', True)
+        dialog.focus_force()
+        dialog.after(100, lambda: dialog.attributes('-topmost', False))
+        dialog.after(50, lambda: dialog.focus_set())
 
     result = [None]
 
@@ -779,14 +802,34 @@ def GetBlobDetectionParams():
     cancel_btn = ttk.Button(button_frame, text="Cancel", command=cancel_clicked)
     cancel_btn.pack(side=tk.LEFT, padx=5)
     
-    # Ensure buttons are visible before waiting
+    # Enhanced button visibility and dialog management
     dialog.update_idletasks()
     button_frame.update_idletasks()
+    continue_btn.update_idletasks()
+    cancel_btn.update_idletasks()
     
-    # Force focus and ensure dialog is ready
+    # Force geometry recalculation to ensure buttons are visible
+    main_frame.update()
+    button_frame.update()
+    
+    # Multiple focus attempts with delays for different environments
     dialog.after(10, lambda: dialog.focus_force())
+    dialog.after(50, lambda: dialog.lift())
+    dialog.after(100, lambda: continue_btn.focus_set())
     
-    dialog.wait_window()
+    # Platform-specific additional handling
+    if platform.system() == "Windows":
+        # Extra handling for Python terminal on Windows
+        dialog.after(150, lambda: dialog.attributes('-topmost', True))
+        dialog.after(200, lambda: dialog.attributes('-topmost', False))
+        dialog.after(250, lambda: dialog.focus_force())
+    elif platform.system() == "Darwin":
+        # macOS additional focus handling
+        dialog.after(200, lambda: dialog.focus_force())
+        dialog.after(300, lambda: dialog.lift())
+    
+    # Ensure dialog is ready and wait for user input
+    dialog.wait_window(root)
 
     # Check if main dialog was cancelled
     if result[0] is None:
@@ -902,12 +945,28 @@ def GetBlobDetectionParams():
             cancel_constraint_btn = ttk.Button(constraint_button_frame, text="Cancel", command=constraint_cancel_clicked)
             cancel_constraint_btn.pack(side=tk.LEFT, padx=5)
             
-            # Ensure buttons are visible before waiting
+            # Enhanced button visibility for constraint dialog
             constraint_dialog.update_idletasks()
             constraint_button_frame.update_idletasks()
+            continue_constraint_btn.update_idletasks()
+            cancel_constraint_btn.update_idletasks()
             
-            # Force focus and ensure dialog is ready
+            # Force geometry recalculation
+            constraint_frame.update()
+            constraint_button_frame.update()
+            
+            # Multiple focus attempts with platform-specific handling
             constraint_dialog.after(10, lambda: constraint_dialog.focus_force())
+            constraint_dialog.after(50, lambda: constraint_dialog.lift())
+            constraint_dialog.after(100, lambda: continue_constraint_btn.focus_set())
+            
+            if platform.system() == "Windows":
+                constraint_dialog.after(150, lambda: constraint_dialog.attributes('-topmost', True))
+                constraint_dialog.after(200, lambda: constraint_dialog.attributes('-topmost', False))
+                constraint_dialog.after(250, lambda: constraint_dialog.focus_force())
+            elif platform.system() == "Darwin":
+                constraint_dialog.after(200, lambda: constraint_dialog.focus_force())
+                constraint_dialog.after(300, lambda: constraint_dialog.lift())
 
             constraint_dialog.wait_window()
 
@@ -2234,6 +2293,8 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                             if len(wave.data) == 0:
                                 # Handle empty COM data
                                 f.write(f"{wave_name}[0][0]= {{}}\n")
+                                f.flush()
+                                os.fsync(f.fileno())
                             else:
                                 f.write(f"{wave_name}[0][0]= {{")
                                 for i, row in enumerate(wave.data):
@@ -2244,6 +2305,9 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                                     y_formatted = format_igor_number(float(row[1]))
                                     f.write(f"{{{x_formatted},{y_formatted}}}")
                                 f.write("}\n")
+                            # Ensure file is flushed
+                            f.flush()
+                            os.fsync(f.fileno())
                             print(f"Successfully saved AllCOM with {len(wave.data)} coordinate pairs")
                         except Exception as e:
                             print(f"ERROR saving AllCOM: {e}")
@@ -2251,6 +2315,8 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                             print(f"AllCOM data shape: {wave.data.shape if hasattr(wave.data, 'shape') else 'No shape'}")
                             # Fallback: save empty COM file
                             f.write(f"{wave_name}[0][0]= {{}}\n")
+                            f.flush()
+                            os.fsync(f.fileno())
                             print(f"Saved empty AllCOM file as fallback")
                             raise  # Re-raise the exception after logging
                     else:
@@ -2258,6 +2324,8 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                         if len(wave.data) == 0:
                             # Handle empty measurement data
                             f.write(f"{wave_name}[0]= {{}}\n")
+                            f.flush()
+                            os.fsync(f.fileno())
                             print(f"Saved empty {wave_name} file")
                         else:
                             f.write(f"{wave_name}[0]= {{")
@@ -2272,6 +2340,9 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                                     print(f"WARNING: Invalid value in {wave_name}[{i}]: {value}, using 0")
                                     f.write("0")
                             f.write("}\n")
+                        # Ensure file is flushed
+                        f.flush()
+                        os.fsync(f.fileno())
                         
             except Exception as e:
                 print(f"ERROR: Failed to write {wave_name}: {e}")
@@ -2308,6 +2379,9 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                     # Empty info file
                     f.write("Info[0][0]= {}\n")
                 
+                # Ensure file is flushed
+                f.flush()
+                os.fsync(f.fileno())
                 
         except Exception as e:
             print(f"ERROR: Failed to write Info.txt: {e}")
@@ -2634,6 +2708,10 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
                                 f.write(format_igor_number(float(value)))
                             f.write("}\n")
                             
+                    # Ensure file is flushed and verify it was written
+                    f.flush()
+                    os.fsync(f.fileno())
+                    
                 # Verify file was written
                 file_size = wave_file.stat().st_size
                 if file_size == 0:
@@ -2669,6 +2747,10 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
                         f.write("{" + ",".join(formatted_values) + "}")
                     f.write("}\n")
                     
+                # Ensure file is flushed
+                f.flush()
+                os.fsync(f.fileno())
+                
             # Verify Info file was written
             info_file_size = info_file.stat().st_size
             if info_file_size == 0:
@@ -2717,78 +2799,6 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
                 print(f"ERROR saving ParticleInfo.txt for particle {i}: {e}")
 
         print(f"Single image analysis exported successfully to {full_path}")
-        with open(info_file, 'w') as f:
-            f.write("Particle Detection Results\n")
-            f.write(f"Image: {image_name}\n")
-            f.write(f"Particles Found: {results['numParticles']}\n")
-            f.write("Columns: P_Seed, Q_Seed, NumPixels, MaxBlobStrength, pStart, pStop, qStart, qStop, ")
-            f.write("scale, layer, maximal, parentBlob, numBlobs, unused, particleNumber\n")
-            info_data = results['info'].data
-            for row in info_data:
-                f.write("\t".join(map(str, row)) + "\n")
-
-        # Save measurement waves
-        measurements = {
-            'Heights': results['Heights'],
-            'Areas': results['Areas'],
-            'Volumes': results['Volumes'],
-            'AvgHeights': results['AvgHeights'],
-            'COM': results['COM']
-        }
-
-        for wave_name, wave in measurements.items():
-            wave_file = os.path.join(full_path, f"{wave_name}.txt")
-            with open(wave_file, 'w') as f:
-                f.write(f"Wave: {wave_name}\n")
-                f.write(f"Image: {image_name}\n")
-                if wave_name == 'COM':
-                    f.write("Columns: X_Center, Y_Center\n")
-                    for row in wave.data:
-                        f.write(f"{row[0]}\t{row[1]}\n")
-                else:
-                    f.write("Data:\n")
-                    for value in wave.data:
-                        f.write(f"{value}\n")
-
-        # Save analysis summary
-        summary_file = os.path.join(full_path, "analysis_summary.txt")
-        with open(summary_file, 'w') as f:
-            f.write("Hessian Blob Analysis Summary\n")
-            f.write("=" * 40 + "\n")
-            f.write(f"Image: {image_name}\n")
-            f.write(f"Analysis Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Total Particles: {results['numParticles']}\n\n")
-
-            # Statistics if available
-            if 'Heights' in results and len(results['Heights'].data) > 0:
-                heights = results['Heights'].data
-                areas = results['Areas'].data
-                volumes = results['Volumes'].data
-
-                f.write("Particle Statistics:\n")
-                f.write(f"Mean Height: {np.mean(heights):.3f}\n")
-                f.write(f"Mean Area: {np.mean(areas):.3f}\n")
-                f.write(f"Mean Volume: {np.mean(volumes):.3f}\n")
-                f.write(f"Height Range: {np.min(heights):.3f} - {np.max(heights):.3f}\n")
-                f.write(f"Area Range: {np.min(areas):.3f} - {np.max(areas):.3f}\n")
-                f.write(f"Volume Range: {np.min(volumes):.3f} - {np.max(volumes):.3f}\n")
-
-        # Save analysis parameters
-        params_file = os.path.join(full_path, "Parameters.txt")
-        with open(params_file, 'w') as f:
-            f.write(f"Hessian Blob Analysis Parameters for {image_name}\n")
-            f.write("=" * 50 + "\n")
-            f.write(f"scaleStart = {results['scaleStart']}\n")
-            f.write(f"layers = {results['layers']}\n")
-            f.write(f"scaleFactor = {results['scaleFactor']}\n")
-            f.write(f"detHResponseThresh = {results['detHResponseThresh']}\n")
-            f.write(f"particleType = {results['particleType']}\n")
-            f.write(f"subPixelMult = {results['subPixelMult']}\n")
-            f.write(f"allowOverlap = {results['allowOverlap']}\n")
-            f.write(f"minH = {results['minH']}, maxH = {results['maxH']}\n")
-            f.write(f"minA = {results['minA']}, maxA = {results['maxA']}\n")
-            f.write(f"minV = {results['minV']}, maxV = {results['maxV']}\n")
-            f.write(f"\nParticles found: {results['numParticles']}\n")
 
     elif save_format == "csv":
         # CSV format for Excel
