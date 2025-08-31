@@ -1038,6 +1038,170 @@ def GetBlobDetectionParams():
     return result[0]
 
 
+def get_analysis_parameters(image_wave, root=None):
+    """
+    Show dialog to get analysis parameters from user
+    """
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+    import platform
+    
+    if root is None:
+        root = tk.Tk()
+        root.withdraw()
+    
+    dialog = tk.Toplevel(root)
+    dialog.title("Hessian Blob Parameters")
+    dialog.geometry("700x550")
+    dialog.resizable(False, False)
+    
+    # Make dialog modal
+    dialog.transient(root)
+    dialog.grab_set()
+    
+    # Center dialog
+    dialog.update_idletasks()
+    x = (dialog.winfo_screenwidth() // 2) - 350
+    y = (dialog.winfo_screenheight() // 2) - 275
+    dialog.geometry(f"700x550+{x}+{y}")
+    
+    result = [None]
+    
+    # Main frame with padding
+    main_frame = ttk.Frame(dialog, padding="20")
+    main_frame.pack(fill=tk.BOTH, expand=True)
+    
+    # Create scrollable frame for parameters
+    canvas = tk.Canvas(main_frame, height=400)
+    scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+    scrollable_frame = ttk.Frame(canvas)
+    
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas_frame = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+    
+    # Parameter inputs
+    row = 0
+    
+    # Minimum Size
+    ttk.Label(scrollable_frame, text="Minimum Size in Pixels").grid(row=row, column=0, sticky=tk.W, pady=5)
+    min_size_var = tk.IntVar(value=1)
+    ttk.Entry(scrollable_frame, textvariable=min_size_var, width=20).grid(row=row, column=1, padx=10, pady=5)
+    row += 1
+    
+    # Maximum Size
+    ttk.Label(scrollable_frame, text="Maximum Size in Pixels").grid(row=row, column=0, sticky=tk.W, pady=5)
+    max_size_var = tk.IntVar(value=120)
+    ttk.Entry(scrollable_frame, textvariable=max_size_var, width=20).grid(row=row, column=1, padx=10, pady=5)
+    row += 1
+    
+    # Scaling Factor
+    ttk.Label(scrollable_frame, text="Scaling Factor").grid(row=row, column=0, sticky=tk.W, pady=5)
+    scale_factor_var = tk.DoubleVar(value=1.5)
+    ttk.Entry(scrollable_frame, textvariable=scale_factor_var, width=20).grid(row=row, column=1, padx=10, pady=5)
+    row += 1
+    
+    # Minimum Blob Strength
+    ttk.Label(scrollable_frame, text="Minimum Blob Strength (-2 for interactive, -1 for Otsu's Method)").grid(
+        row=row, column=0, sticky=tk.W, pady=5)
+    thresh_var = tk.DoubleVar(value=-2)
+    ttk.Entry(scrollable_frame, textvariable=thresh_var, width=20).grid(row=row, column=1, padx=10, pady=5)
+    row += 1
+    
+    # Particle Type
+    ttk.Label(scrollable_frame, text="Particle Type (-1 for negative, +1 for positive, 0 for both)").grid(
+        row=row, column=0, sticky=tk.W, pady=5)
+    particle_type_var = tk.IntVar(value=1)
+    ttk.Entry(scrollable_frame, textvariable=particle_type_var, width=20).grid(row=row, column=1, padx=10, pady=5)
+    row += 1
+    
+    # Subpixel Ratio
+    ttk.Label(scrollable_frame, text="Subpixel Ratio").grid(row=row, column=0, sticky=tk.W, pady=5)
+    subpixel_var = tk.IntVar(value=1)
+    ttk.Entry(scrollable_frame, textvariable=subpixel_var, width=20).grid(row=row, column=1, padx=10, pady=5)
+    row += 1
+    
+    # Allow Overlap
+    ttk.Label(scrollable_frame, text="Allow Hessian Blobs to Overlap? (1=yes 0=no)").grid(
+        row=row, column=0, sticky=tk.W, pady=5)
+    overlap_var = tk.IntVar(value=0)
+    ttk.Entry(scrollable_frame, textvariable=overlap_var, width=20).grid(row=row, column=1, padx=10, pady=5)
+    
+    # Update scroll region
+    scrollable_frame.update_idletasks()
+    canvas.configure(scrollregion=canvas.bbox("all"))
+    
+    def ok_clicked():
+        result[0] = {
+            'scaleStart': min_size_var.get(),
+            'layers': max_size_var.get(),
+            'scaleFactor': scale_factor_var.get(),
+            'detHResponseThresh': thresh_var.get(),
+            'particleType': particle_type_var.get(),
+            'maxCurvatureRatio': 10,
+            'subPixelMult': subpixel_var.get(),
+            'allowOverlap': overlap_var.get()
+        }
+        dialog.destroy()
+    
+    def cancel_clicked():
+        result[0] = None
+        dialog.destroy()
+    
+    # CRITICAL FIX: Create button frame with proper geometry management
+    button_frame = ttk.Frame(dialog)
+    button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+    
+    # Create button container centered in button frame
+    button_container = ttk.Frame(button_frame)
+    button_container.pack()
+    
+    # Create buttons with explicit sizing
+    continue_btn = ttk.Button(button_container, text="Continue", command=ok_clicked, width=15)
+    continue_btn.pack(side=tk.LEFT, padx=5)
+    
+    cancel_btn = ttk.Button(button_container, text="Cancel", command=cancel_clicked, width=15)
+    cancel_btn.pack(side=tk.LEFT, padx=5)
+    
+    help_btn = ttk.Button(button_container, text="Help", width=10)
+    help_btn.pack(side=tk.LEFT, padx=5)
+    
+    # Bind keyboard shortcuts
+    dialog.bind('<Return>', lambda e: ok_clicked())
+    dialog.bind('<Escape>', lambda e: cancel_clicked())
+    
+    # Platform-specific fixes for button visibility
+    if platform.system() == "Windows":
+        # Windows terminal/Spyder fix
+        dialog.update()
+        dialog.update_idletasks()
+        button_frame.update()
+        button_container.update()
+        continue_btn.update()
+        cancel_btn.update()
+        
+        # Force redraw
+        dialog.after(10, lambda: dialog.update())
+        dialog.after(20, lambda: button_frame.update())
+        dialog.after(30, lambda: dialog.focus_force())
+        
+    elif platform.system() == "Darwin":
+        # macOS fix
+        dialog.update()
+        dialog.lift()
+        dialog.focus_force()
+    
+    # Set initial focus to Continue button
+    continue_btn.focus_set()
+    
+    # Wait for dialog
+    dialog.wait_window()
+    
+    return result[0]
+
+
 def InteractiveThreshold(im, detH, LG, particleType, maxCurvatureRatio):
     """Interactive threshold selection"""
     print("Opening interactive threshold window...")
@@ -2709,43 +2873,25 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
 def SaveSingleImageResults(results, image_name, output_path="", save_format="igor"):
     """
     Save single image analysis results
-
-    Parameters:
-        results : dict - Results from HessianBlobs for single image
-        image_name : str - Name of the analyzed image
-        output_path : str - Directory to save files
-        save_format : str - Format to save ("igor", "csv", "txt")
     """
     import os
     import datetime
     import numpy as np
     from pathlib import Path
 
-    logger.info("SaveSingleImageResults: Starting single image save operation")
-    logger.debug(f"Image: {image_name}, path: {output_path}, format: {save_format}")
-    if results:
-        logger.debug(f"Results keys: {list(results.keys())}")
-    else:
-        logger.warning("No results provided")
-
     # Verify analysis results contain valid data
     if not verify_analysis_results(results):
-        print("ERROR: Analysis results validation failed!")
-        raise ValueError("Analysis results contain no valid data")
+        raise ValueError("Analysis results validation failed")
 
     if not output_path:
         output_path = Path.cwd()
-        print(f"Using current directory: {output_path}")
     else:
         output_path = Path(output_path)
 
     if not output_path.exists():
-        print(f"ERROR: Output path does not exist: {output_path}")
         raise ValueError(f"Output path does not exist: {output_path}")
         
-    # Check write permissions
     if not os.access(str(output_path), os.W_OK):
-        print(f"ERROR: No write permission for output path: {output_path}")
         raise PermissionError(f"No write permission for output path: {output_path}")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2755,236 +2901,122 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
     clean_image_name = "".join(c for c in clean_image_name if c.isalnum() or c in ('_', '-'))
     folder_name = f"{clean_image_name}_Particles"
     full_path = output_path / folder_name
-    print(f"Creating folder: {full_path}")
-
-    try:
-        full_path.mkdir(parents=True, exist_ok=True)
-        print(f"Folder created successfully: {full_path.exists()}")
-    except Exception as e:
-        print(f"ERROR: Failed to create folder: {e}")
-        raise
+    
+    full_path.mkdir(parents=True, exist_ok=True)
 
     if save_format == "igor" or save_format == "txt":
-        print("Saving in Igor Pro format...")
-
         # Save measurement waves in main folder
-        required_keys = ['Heights', 'Areas', 'Volumes', 'AvgHeights', 'COM']
-        missing_keys = [key for key in required_keys if key not in results]
-        if missing_keys:
-            print(f"ERROR: Missing required keys in results: {missing_keys}")
-            raise ValueError(f"Missing required measurement waves: {missing_keys}")
-
         measurements = {
-            'Heights': results['Heights'],
-            'Areas': results['Areas'],
-            'Volumes': results['Volumes'],
-            'AvgHeights': results['AvgHeights'],
-            'COM': results['COM']
+            'Heights': results.get('Heights'),
+            'Areas': results.get('Areas'),
+            'Volumes': results.get('Volumes'),
+            'AvgHeights': results.get('AvgHeights'),
+            'COM': results.get('COM')
         }
 
-        print(f"Saving {len(measurements)} measurement waves...")
-
         for wave_name, wave in measurements.items():
+            if wave is None or not hasattr(wave, 'data') or wave.data is None:
+                continue
+                
             wave_file = full_path / f"{wave_name}.txt"
-            print(f"Saving {wave_name} to {wave_file}")
-
-            # Validate wave data before writing
-            if wave is None:
-                print(f"ERROR: Wave {wave_name} is None!")
-                raise ValueError(f"Wave {wave_name} is None")
-
-            if not hasattr(wave, 'data'):
-                print(f"ERROR: Wave {wave_name} has no data attribute!")
-                raise ValueError(f"Wave {wave_name} has no data attribute")
-                
-            if wave.data is None:
-                print(f"ERROR: Wave {wave_name} data is None!")
-                raise ValueError(f"Wave {wave_name} data is None")
-                
-            # Check if wave contains actual measurement data
-            if wave_name != 'COM' and len(wave.data) == 0:
-                print(f"WARNING: Wave {wave_name} contains no data - writing empty wave")
-            elif wave_name == 'COM' and (len(wave.data) == 0 or wave.data.shape[0] == 0):
-                print(f"WARNING: Wave {wave_name} contains no coordinate data - writing empty wave")
-
-            # Verify data arrays are not empty before writing
-            if wave_name != 'COM':
-                if len(wave.data) == 0:
-                    print(f"WARNING: {wave_name} data array is empty")
-                else:
-                    # Verify numerical values
-                    if not np.all(np.isfinite(wave.data)):
-                        print(f"WARNING: {wave_name} contains invalid values (inf/nan)")
-            else:
-                if wave.data.shape[0] == 0:
-                    print(f"WARNING: {wave_name} coordinate array is empty")
-                else:
-                    if not np.all(np.isfinite(wave.data)):
-                        print(f"WARNING: {wave_name} contains invalid coordinates (inf/nan)")
-
-            try:
+            
+            # CRITICAL FIX: Ensure data is properly written
+            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
                 if wave_name == 'COM':
-                    # For 2D waves (COM): flatten to 1D for Igor format
-                    flat_data = wave.data.flatten()
-                    write_wave_file(str(wave_file), flat_data, wave_name)
-                else:
-                    # For 1D waves (Heights, Areas, Volumes, AvgHeights):
-                    write_wave_file(str(wave_file), wave.data, wave_name)
-                    
-                # Verify file was written properly
-                file_size = wave_file.stat().st_size
-                logger.info(f"Wrote {wave_name}: {file_size} bytes")
-                    
-            except Exception as e:
-                raise ValueError(f"Failed to write {wave_name}: {e}")
-
-        # Save Info.txt file for ViewParticles compatibility
-        info_file = full_path / "Info.txt"
-        
-        # Validate info data exists
-        if 'info' not in results or results['info'] is None:
-            print("ERROR: Info data missing from results")
-            raise ValueError("Info data missing from results")
-            
-        if not hasattr(results['info'], 'data') or results['info'].data is None:
-            print("ERROR: Info wave has no data")
-            raise ValueError("Info wave has no data")
-            
-        info_data = results['info'].data
-        
-        try:
-            with open(info_file, 'w', encoding='utf-8', newline='\n') as f:
-                # Write Igor Pro header comments with column descriptions
-                f.write("// Igor Pro HessianBlobs Info Wave\n")
-                f.write("// Column descriptions:\n")
-                f.write("// 0: P_Seed (X coordinate)\n")
-                f.write("// 1: Q_Seed (Y coordinate)\n")
-                f.write("// 2: numPixels (area in pixels)\n")
-                f.write("// 3: maxBlobStrength (detector response)\n")
-                f.write("// 4: pStart (X boundary start)\n")
-                f.write("// 5: pStop (X boundary end)\n")
-                f.write("// 6: qStart (Y boundary start)\n")
-                f.write("// 7: qStop (Y boundary end)\n")
-                f.write("// 8: scale (characteristic scale)\n")
-                f.write("// 9: radius (estimated radius)\n")
-                f.write("// 10: inBounds (boundary flag)\n")
-                f.write("// 11: height (maximum intensity)\n")
-                f.write("// 12: volume (integrated intensity)\n")
-                f.write("// 13: area (physical area in nm² if calibrated)\n")
-                f.write("// 14: particleNum (particle number)\n")
-                
-                if len(info_data) == 0 or info_data.shape[0] == 0:
-                    f.write("Info[0][0]= {}\n")
-                else:
-                    f.write("Info[0][0]= {")
-                    for i, row in enumerate(info_data):
+                    # COM is 2D array
+                    f.write(f"{wave_name}[0]= {{")
+                    for i, point in enumerate(wave.data):
                         if i > 0:
                             f.write(",")
-                        formatted_values = [format_igor_number(float(val)) for val in row]
-                        f.write("{" + ",".join(formatted_values) + "}")
+                        f.write(f"{{{format_igor_number(float(point[0]))},{format_igor_number(float(point[1]))}}}")
                     f.write("}\n")
-                    
-                # Ensure file is flushed
+                else:
+                    # Other waves are 1D
+                    f.write(f"{wave_name}[0]= {{")
+                    for i, value in enumerate(wave.data):
+                        if i > 0:
+                            f.write(",")
+                        f.write(format_igor_number(float(value)))
+                    f.write("}\n")
+                
+                # Force write to disk
                 f.flush()
                 os.fsync(f.fileno())
-                
-            # Verify Info file was written and contains data
-            info_file_size = info_file.stat().st_size
-            if info_file_size == 0:
-                raise ValueError("Info.txt file is empty after write")
-                
-            # Verify file contains expected Igor Pro format
-            with open(info_file, 'r') as verify_f:
-                content = verify_f.read()
-                if "Info[0][0]=" not in content:
-                    raise ValueError("Info.txt file does not contain proper Igor Pro format")
-                    
-            print(f"  Info.txt: {info_file_size} bytes written and verified")
-                
-        except Exception as e:
-            raise ValueError(f"Failed to write Info.txt: {e}")
+            
+            # Verify file was written with data
+            if not wave_file.exists() or wave_file.stat().st_size == 0:
+                raise IOError(f"Failed to write data to {wave_file}")
 
-        # Save particle folders with actual data
-        info_data = results['info'].data
-        heights_data = results['Heights'].data if 'Heights' in results and len(results['Heights'].data) > 0 else []
-        areas_data = results['Areas'].data if 'Areas' in results and len(results['Areas'].data) > 0 else []
-        volumes_data = results['Volumes'].data if 'Volumes' in results and len(results['Volumes'].data) > 0 else []
-        com_data = results['COM'].data if 'COM' in results and results['COM'].data.shape[0] > 0 else []
-        
-        accepted_particles = results['numParticles']
-        particle_folders = results.get('particle_folders', {})
-        mapNum_data = results.get('mapNum3D', {}).data if 'mapNum3D' in results else None
-        
-        for i in range(min(accepted_particles, len(particle_folders))):
-            particle_folder = Path(particle_folders[i])
+        # Save Info wave with particle detection data
+        if 'info' in results and results['info'] is not None:
+            info_data = results['info'].data
+            info_file = full_path / "Info.txt"
             
-            # Write particle image data
-            particle_image_file = particle_folder / f"Particle_{i}.npy"
-            if mapNum_data is not None:
-                particle_data = mapNum_data[mapNum_data == i]
-                if particle_data.size > 0:
-                    np.save(str(particle_image_file), particle_data)
-                    # Verify write
-                    if not particle_image_file.exists() or particle_image_file.stat().st_size == 0:
-                        raise IOError(f"Failed to write particle {i} data")
-            
-            # Write particle info with explicit formatting
-            particle_info_file = particle_folder / "ParticleInfo.txt"
-            with open(particle_info_file, 'w', encoding='utf-8') as f:
-                f.write(f"Particle {i} Information\n")
-                f.write(f"Height: {heights_data[i] if i < len(heights_data) else 0.0:.6e}\n")
-                f.write(f"Area: {areas_data[i] if i < len(areas_data) else 0.0:.6e}\n")
-                f.write(f"Volume: {volumes_data[i] if i < len(volumes_data) else 0.0:.6e}\n")
-                if i < len(com_data) and len(com_data[i]) >= 2:
-                    f.write(f"Center: ({com_data[i][0]:.6f}, {com_data[i][1]:.6f})\n")
+            with open(info_file, 'w', encoding='utf-8', newline='\n') as f:
+                f.write("Info[0]= {\n")
+                for i in range(info_data.shape[0]):
+                    f.write("{")
+                    for j in range(15):  # 15 columns in info wave
+                        if j > 0:
+                            f.write(",")
+                        f.write(format_igor_number(float(info_data[i, j])))
+                    f.write("}")
+                    if i < info_data.shape[0] - 1:
+                        f.write(",")
+                    f.write("\n")
+                f.write("}\n")
                 f.flush()
                 os.fsync(f.fileno())
 
-        logger.info("HessianBlobs: Single image analysis exported")
-
-    elif save_format == "csv":
-        # CSV format for Excel
-        import csv
-        csv_file = full_path / f"{image_name}_particles.csv"
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['# Hessian Blob Analysis Results'])
-            writer.writerow(['# Image:', image_name])
-            writer.writerow(['# Particles:', results['numParticles']])
-            writer.writerow([])
-            writer.writerow(['Particle_ID', 'Height', 'Area', 'Volume', 'AvgHeight', 'X_Center', 'Y_Center'])
-
-            # Safe access to measurement waves with bounds checking
-            heights = results['Heights'].data if 'Heights' in results and len(results['Heights'].data) > 0 else []
-            areas = results['Areas'].data if 'Areas' in results and len(results['Areas'].data) > 0 else []
-            volumes = results['Volumes'].data if 'Volumes' in results and len(results['Volumes'].data) > 0 else []
-            avg_heights = results['AvgHeights'].data if 'AvgHeights' in results and len(
-                results['AvgHeights'].data) > 0 else []
-            com = results['COM'].data if 'COM' in results and results['COM'].data.shape[0] > 0 else []
-
-            num_particles = max(len(heights), len(areas), len(volumes), len(avg_heights), len(com))
+        # Create individual particle folders with data
+        if 'info' in results and results['info'] is not None:
+            info_data = results['info'].data
+            num_particles = info_data.shape[0]
+            
             for i in range(num_particles):
-                height_val = heights[i] if i < len(heights) else 'N/A'
-                area_val = areas[i] if i < len(areas) else 'N/A'
-                volume_val = volumes[i] if i < len(volumes) else 'N/A'
-                avg_height_val = avg_heights[i] if i < len(avg_heights) else 'N/A'
-                x_center = com[i, 0] if i < len(com) and com.shape[1] >= 2 else 'N/A'
-                y_center = com[i, 1] if i < len(com) and com.shape[1] >= 2 else 'N/A'
-                writer.writerow([i + 1, height_val, area_val, volume_val, avg_height_val, x_center, y_center])
+                particle_folder = full_path / f"Particle_{i}"
+                particle_folder.mkdir(parents=True, exist_ok=True)
+                
+                # Save particle info file
+                particle_info_file = particle_folder / "ParticleInfo.txt"
+                with open(particle_info_file, 'w', encoding='utf-8', newline='\n') as f:
+                    f.write(f"Particle {i} from {image_name}\n")
+                    f.write("=" * 50 + "\n")
+                    
+                    if 'Heights' in results and i < len(results['Heights'].data):
+                        f.write(f"Height: {format_igor_number(results['Heights'].data[i])}\n")
+                    if 'Areas' in results and i < len(results['Areas'].data):
+                        f.write(f"Area: {format_igor_number(results['Areas'].data[i])}\n")
+                    if 'Volumes' in results and i < len(results['Volumes'].data):
+                        f.write(f"Volume: {format_igor_number(results['Volumes'].data[i])}\n")
+                    if 'AvgHeights' in results and i < len(results['AvgHeights'].data):
+                        f.write(f"AvgHeight: {format_igor_number(results['AvgHeights'].data[i])}\n")
+                    if 'COM' in results and i < len(results['COM'].data):
+                        f.write(f"X_Center: {format_igor_number(results['COM'].data[i][0])}\n")
+                        f.write(f"Y_Center: {format_igor_number(results['COM'].data[i][1])}\n")
+                    
+                    if i < len(info_data):
+                        f.write(f"\nDetection Data:\n")
+                        f.write(f"P_Seed: {format_igor_number(info_data[i][0])}\n")
+                        f.write(f"Q_Seed: {format_igor_number(info_data[i][1])}\n")
+                        f.write(f"numPixels: {int(info_data[i][2])}\n")
+                        f.write(f"maxBlobStrength: {format_igor_number(info_data[i][3])}\n")
+                        f.write(f"pStart: {int(info_data[i][4])}\n")
+                        f.write(f"pStop: {int(info_data[i][5])}\n")
+                        f.write(f"qStart: {int(info_data[i][6])}\n")
+                        f.write(f"qStop: {int(info_data[i][7])}\n")
+                        f.write(f"scale: {format_igor_number(info_data[i][8])}\n")
+                        f.write(f"radius: {format_igor_number(info_data[i][9])}\n")
+                        f.write(f"inBounds: {int(info_data[i][10])}\n")
+                        f.write(f"height: {format_igor_number(info_data[i][11])}\n")
+                        f.write(f"volume: {format_igor_number(info_data[i][12])}\n")
+                        f.write(f"area: {format_igor_number(info_data[i][13])}\n")
+                        f.write(f"particleNum: {int(info_data[i][14])}\n")
+                    
+                    f.flush()
+                    os.fsync(f.fileno())
 
-    print(f"=== SAVE SINGLE IMAGE COMPLETE ===")
-    print(f"Single image results saved to: {full_path}")
-    print(f"Folder exists: {os.path.exists(full_path)}")
-    # Final verification with actual byte counts
-    created_files = list(full_path.rglob("*.txt"))
-    total_size = sum(f.stat().st_size for f in created_files)
-    empty_files = [f for f in created_files if f.stat().st_size == 0]
-    
-    if empty_files:
-        print(f"WARNING: {len(empty_files)} empty files created")
-    
-    print(f"Single image analysis saved: {len(created_files)} files, {total_size} bytes")
-    return full_path
+    return str(full_path)
 
 
 def ViewParticleData(info_wave, image_name, original_image=None):

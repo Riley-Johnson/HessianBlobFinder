@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(grep:*)"
+    ],
+    "deny": [],
+    "additionalDirectories": [
+      "C:\\mnt\\c\\Users\\riley\\PycharmProjects"
+    ]
+  }
+}

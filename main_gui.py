@@ -923,7 +923,7 @@ class HessianBlobGUI:
 
         try:
             # Get parameters
-            params = GetBlobDetectionParams()
+            params = get_analysis_parameters(self.current_display_image, self)
             if params is None:
                 self.log_message("Analysis cancelled by user")
                 return
@@ -1063,6 +1063,62 @@ class HessianBlobGUI:
             self.log_message(f"Error in analysis: {str(e)}")
             messagebox.showerror("Analysis Error", f"Analysis failed:\n{str(e)}")
 
+    def run_hessian_blob(self):
+        """
+        Run Hessian blob detection on current image with proper error handling
+        """
+        if self.current_display_image is None:
+            messagebox.showwarning("No Image", "Please load an image first.")
+            return
+        
+        try:
+            # Get analysis parameters
+            params = get_analysis_parameters(self.current_display_image, self)
+            
+            if params is None:
+                self.log_message("Analysis cancelled by user")
+                return
+            
+            self.log_message("Starting Hessian blob detection...")
+            
+            # Run analysis
+            results = HessianBlobs(
+                self.current_display_image,
+                scaleStart=params['scaleStart'],
+                layers=params['layers'],
+                scaleFactor=params['scaleFactor'],
+                detHResponseThresh=params['detHResponseThresh'],
+                particleType=params['particleType'],
+                subPixelMult=params['subPixelMult'],
+                allowOverlap=params['allowOverlap']
+            )
+            
+            # Verify results before proceeding
+            if not verify_analysis_results(results):
+                raise ValueError("Analysis produced invalid results")
+            
+            # Store results
+            image_name = self.current_display_image.name
+            self.current_results[image_name] = results
+            
+            # Auto-save with verification
+            self.prompt_single_image_save(results, image_name)
+            
+            # Update display
+            self.display_results(results)
+            
+            particle_count = results['info'].data.shape[0] if 'info' in results else 0
+            self.log_message(f"Analysis complete! Found {particle_count} particles.")
+            
+        except Exception as e:
+            error_msg = f"Analysis failed: {str(e)}"
+            self.log_message(f"ERROR: {error_msg}")
+            messagebox.showerror("Analysis Error", error_msg)
+            
+            # Log full traceback for debugging
+            import traceback
+            traceback.print_exc()
+
     def run_batch_analysis(self):
         """Run batch analysis on all loaded images"""
         if not self.current_images:
@@ -1071,7 +1127,7 @@ class HessianBlobGUI:
 
         try:
             # Get parameters once for all images
-            params = GetBlobDetectionParams()
+            params = get_analysis_parameters(self.current_display_image, self)
             if params is None:
                 return
 

@@ -106,6 +106,50 @@ class DataFolder:
 data_browser = DataFolder("root")
 
 
+def load_image_file(filepath):
+    """
+    Load a single image file with proper path handling for all platforms
+    """
+    from pathlib import Path
+    import platform
+    
+    # Ensure proper path handling
+    filepath = Path(filepath)
+    
+    # Fix for Mac: ensure proper file permissions check
+    if platform.system() == "Darwin":
+        import os
+        if not os.access(str(filepath), os.R_OK):
+            raise PermissionError(f"Cannot read file: {filepath}")
+    
+    filename = filepath.name
+    file_ext = filepath.suffix.lower()
+    
+    try:
+        if file_ext == '.ibw':
+            wave = load_ibw_file(str(filepath))
+        elif file_ext in ['.tif', '.tiff']:
+            wave = load_tiff_file(str(filepath))
+        elif file_ext in ['.png', '.jpg', '.jpeg']:
+            wave = load_image_file_pil(str(filepath))
+        else:
+            raise ValueError(f"Unsupported file type: {file_ext}")
+        
+        if wave is None:
+            raise ValueError(f"Failed to load file: {filename}")
+        
+        wave.name = filename
+        
+        return wave
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"Failed to load {filename}:\n{str(e)}"
+        if platform.system() == "Darwin":
+            error_msg += "\n\nMac users: Ensure the app has file access permissions in System Preferences > Security & Privacy"
+        raise IOError(error_msg)
+
+
 def LoadWave(file_path):
     """
     Load an image file and return as Wave object
