@@ -589,13 +589,16 @@ def MeasureParticles(im, info):
     x_scale = im.GetScale('x')
     y_scale = im.GetScale('y')
 
-    x_delta = x_scale['delta']
-    y_delta = y_scale['delta']
+    # Extract and use physical scaling from the image Wave
+    x_delta = x_scale['delta'] if x_scale['units'] else 1.0
+    y_delta = y_scale['delta'] if y_scale['units'] else 1.0
+    x_units = x_scale['units'] if x_scale['units'] else 'pixels'
+    y_units = y_scale['units'] if y_scale['units'] else 'pixels'
     x_offset = x_scale['offset']
     y_offset = y_scale['offset']
 
     # Physical area per pixel
-    pixel_area = x_delta * y_delta
+    pixel_area_physical = x_delta * y_delta
 
     for i in range(num_particles):
         # Extract particle parameters
@@ -650,20 +653,23 @@ def MeasureParticles(im, info):
                     y_center_sum += y * pixel_value
                     total_intensity += pixel_value
 
-        # Calculate derived measurements
+        # Calculate derived measurements in measurement loop using physical units
         if area_pixels > 0:
-            # Convert area to physical units
-            area_physical = area_pixels * pixel_area
+            # Convert area from pixels² to nm² (if calibrated) 
+            area_physical = area_pixels * pixel_area_physical
+            
+            # Convert volume to nm³ equivalent (nm² × intensity units)
+            volume_physical = volume * pixel_area_physical
 
-            # Calculate average height
+            # Calculate average height (remains in intensity units)
             avg_height = volume / area_physical if area_physical > 0 else 0
 
-            # Calculate center of mass coordinates
+            # Calculate center of mass coordinates  
             if total_intensity > 0:
                 x_center = x_center_sum / total_intensity
                 y_center = y_center_sum / total_intensity
 
-                # Convert to physical coordinates
+                # Convert positions to physical coordinates (nm if calibrated)
                 x_center_phys = x_center * x_delta + x_offset
                 y_center_phys = y_center * y_delta + y_offset
             else:
@@ -673,13 +679,14 @@ def MeasureParticles(im, info):
         else:
             # No pixels found
             area_physical = 0
+            volume_physical = 0
             avg_height = 0
             x_center_phys = p_seed * x_delta + x_offset
             y_center_phys = q_seed * y_delta + y_offset
 
         # Store measurements in info array
-        info.data[i, 8] = area_physical  # Area
-        info.data[i, 9] = volume  # Volume
+        info.data[i, 8] = area_physical  # Area in physical units (nm² if calibrated)
+        info.data[i, 9] = volume_physical  # Volume in physical units (nm² × intensity)
         info.data[i, 10] = height  # Height
         info.data[i, 11] = x_center_phys  # X_Center
         info.data[i, 12] = y_center_phys  # Y_Center
