@@ -814,25 +814,29 @@ def GetBlobDetectionParams():
         result[0] = None
         dialog.destroy()
 
-    button_frame = ttk.Frame(main_frame)
-    button_frame.pack(side=tk.BOTTOM, pady=10, fill=tk.X)
-
-    # Create buttons with explicit geometry management
-    continue_btn = ttk.Button(button_frame, text="Continue", command=ok_clicked)
-    continue_btn.pack(side=tk.LEFT, padx=5)
-    
-    cancel_btn = ttk.Button(button_frame, text="Cancel", command=cancel_clicked)
-    cancel_btn.pack(side=tk.LEFT, padx=5)
-    
-    # Enhanced button visibility and dialog management
+    # Ensure minimum dialog height for button visibility
+    dialog.minsize(700, 450)
     dialog.update_idletasks()
-    button_frame.update_idletasks()
-    continue_btn.update_idletasks()
-    cancel_btn.update_idletasks()
+
+    # Force button frame to bottom with explicit pack
+    button_frame = ttk.Frame(main_frame)
+    button_frame.pack(side=tk.BOTTOM, pady=10, fill=tk.X, expand=False)
+    main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    # Explicit button creation with grid instead of pack for better control
+    continue_btn = ttk.Button(button_frame, text="Continue", command=ok_clicked)
+    continue_btn.grid(row=0, column=0, padx=5, pady=5, sticky='ew')
+    cancel_btn = ttk.Button(button_frame, text="Cancel", command=cancel_clicked)  
+    cancel_btn.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
+
+    # Configure grid weights
+    button_frame.grid_columnconfigure(0, weight=1)
+    button_frame.grid_columnconfigure(1, weight=1)
     
-    # Force geometry recalculation to ensure buttons are visible
-    main_frame.update()
-    button_frame.update()
+    # Multiple update cycles to ensure rendering
+    for _ in range(3):
+        dialog.update_idletasks()
+        dialog.update()
     
     # Multiple focus attempts with delays for different environments
     dialog.after(10, lambda: dialog.focus_force())
@@ -1785,6 +1789,24 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
 
     # Return data folder path and all waves
 
+    # Verify measurement data integrity
+    measurements = ['Heights', 'Areas', 'Volumes', 'AvgHeights']
+    for measure_name in measurements:
+        if measure_name in locals():
+            wave = locals()[measure_name]
+            if wave is None or not hasattr(wave, 'data') or wave.data is None:
+                print(f"ERROR: {measure_name} wave is invalid")
+                raise ValueError(f"{measure_name} measurement failed")
+            if len(wave.data) == 0:
+                print(f"WARNING: {measure_name} has no data (0 particles)")
+            else:
+                print(f"{measure_name}: {len(wave.data)} values, range [{np.min(wave.data):.6e}, {np.max(wave.data):.6e}]")
+
+    # Verify info wave
+    if info.data.shape[0] != accepted_particles:
+        print(f"ERROR: info particle count mismatch: {info.data.shape[0]} vs {accepted_particles}")
+        raise ValueError("Particle count mismatch in info wave")
+
     print(f"=== HESSIAN BLOBS FINAL RETURN ===")
     print(f"About to return results with {accepted_particles} blobs")
     print(f"Results keys will be: info, SS_MAXMAP, SS_MAXSCALEMAP, detH, LG, etc.")
@@ -2349,80 +2371,46 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                     elif wave_name == 'AllCOM':
                         f.write("// All particle center of mass coordinates (nm if calibrated, pixels otherwise)\n")
                     
-                    # Use Igor Pro wave format with proper number formatting
-                    if wave_name == 'AllCOM':
-                        print(f"Saving AllCOM with shape: {wave.data.shape}")
-                        try:
-                            if len(wave.data) == 0:
-                                # Handle empty COM data
-                                f.write(f"{wave_name}[0][0]= {{}}\n")
-                                f.flush()
-                                os.fsync(f.fileno())
-                            else:
-                                f.write(f"{wave_name}[0][0]= {{")
-                                for i, row in enumerate(wave.data):
-                                    if i > 0:
-                                        f.write(",")
-                                    # Format COM coordinates
-                                    x_formatted = format_igor_number(float(row[0]))
-                                    y_formatted = format_igor_number(float(row[1]))
-                                    f.write(f"{{{x_formatted},{y_formatted}}}")
-                                f.write("}\n")
-                            # Ensure file is flushed
-                            f.flush()
-                            os.fsync(f.fileno())
-                            print(f"Successfully saved AllCOM with {len(wave.data)} coordinate pairs")
-                        except Exception as e:
-                            print(f"ERROR saving AllCOM: {e}")
-                            print(f"AllCOM data type: {type(wave.data)}")
-                            print(f"AllCOM data shape: {wave.data.shape if hasattr(wave.data, 'shape') else 'No shape'}")
-                            # Fallback: save empty COM file
-                            f.write(f"{wave_name}[0][0]= {{}}\n")
-                            f.flush()
-                            os.fsync(f.fileno())
-                            print(f"Saved empty AllCOM file as fallback")
-                            raise  # Re-raise the exception after logging
-                    else:
-                        # Handle 1D measurement data
+                    # Verify data arrays are not empty before writing
+                    if wave_name != 'AllCOM':
                         if len(wave.data) == 0:
-                            # Handle empty measurement data
-                            f.write(f"{wave_name}[0]= {{}}\n")
-                            f.flush()
-                            os.fsync(f.fileno())
-                            print(f"Saved empty {wave_name} file")
+                            print(f"WARNING: {wave_name} data array is empty")
                         else:
-                            f.write(f"{wave_name}[0]= {{")
-                            for i, value in enumerate(wave.data):
-                                if i > 0:
-                                    f.write(",")
-                                # Use Igor Pro number formatting with validation
-                                try:
-                                    formatted_value = format_igor_number(float(value))
-                                    f.write(formatted_value)
-                                except (ValueError, TypeError) as e:
-                                    print(f"WARNING: Invalid value in {wave_name}[{i}]: {value}, using 0")
-                                    f.write("0")
-                            f.write("}\n")
-                        # Ensure file is flushed
-                        f.flush()
-                        os.fsync(f.fileno())
+                            # Verify numerical values
+                            if not np.all(np.isfinite(wave.data)):
+                                print(f"WARNING: {wave_name} contains invalid values (inf/nan)")
+                    else:
+                        if wave.data.shape[0] == 0:
+                            print(f"WARNING: {wave_name} coordinate array is empty")
+                        else:
+                            if not np.all(np.isfinite(wave.data)):
+                                print(f"WARNING: {wave_name} contains invalid coordinates (inf/nan)")
+
+                    if wave_name == 'AllCOM':
+                        # For 2D waves (COM):
+                        f.write(f"// {wave_name} wave\n")
+                        f.write(f"// Dimensions: {wave.data.shape}\n")
+                        for row in wave.data:
+                            f.write('\t'.join([f"{val:.6e}" for val in row]) + '\n')
+                    else:
+                        # For 1D waves (Heights, Areas, Volumes, AvgHeights):
+                        f.write(f"// {wave_name} wave\n")
+                        f.write(f"// NumPoints: {len(wave.data)}\n")
+                        for i, value in enumerate(wave.data):
+                            f.write(f"{value:.6e}\n")
+                    
+                    f.flush()
+                    os.fsync(f.fileno())
                         
-                # Verify file was written and contains data
+                # Force file system sync and verify
+                if not wave_file.exists():
+                    raise IOError(f"Failed to create {wave_file}")
+                    
                 file_size = wave_file.stat().st_size
                 if file_size == 0:
-                    raise ValueError(f"{wave_name} file is empty after write")
+                    raise IOError(f"File {wave_file} is empty (0 bytes)")
                     
-                # Verify file contains expected Igor Pro format
-                with open(wave_file, 'r') as verify_f:
-                    content = verify_f.read()
-                    if wave_name == 'AllCOM':
-                        if f"{wave_name}[0][0]=" not in content:
-                            raise ValueError(f"{wave_name} file does not contain proper Igor Pro format")
-                    else:
-                        if f"{wave_name}[0]=" not in content:
-                            raise ValueError(f"{wave_name} file does not contain proper Igor Pro format")
-                
-                print(f"  {wave_name}: {file_size} bytes written and verified")
+                print(f"Wrote {wave_name}: {file_size} bytes")
                         
             except Exception as e:
                 print(f"ERROR: Failed to write {wave_name}: {e}")
@@ -2802,78 +2790,48 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
             elif wave_name == 'COM' and (len(wave.data) == 0 or wave.data.shape[0] == 0):
                 print(f"WARNING: Wave {wave_name} contains no coordinate data - writing empty wave")
 
+            # Verify data arrays are not empty before writing
+            if wave_name != 'COM':
+                if len(wave.data) == 0:
+                    print(f"WARNING: {wave_name} data array is empty")
+                else:
+                    # Verify numerical values
+                    if not np.all(np.isfinite(wave.data)):
+                        print(f"WARNING: {wave_name} contains invalid values (inf/nan)")
+            else:
+                if wave.data.shape[0] == 0:
+                    print(f"WARNING: {wave_name} coordinate array is empty")
+                else:
+                    if not np.all(np.isfinite(wave.data)):
+                        print(f"WARNING: {wave_name} contains invalid coordinates (inf/nan)")
+
             try:
                 with open(wave_file, 'w') as f:
-                    # Write Igor Pro header comments with measurement units
-                    f.write(f"// Igor Pro {wave_name} Wave\n")
-                    if wave_name == 'Heights':
-                        f.write("// Heights in image intensity units\n")
-                    elif wave_name == 'Areas':
-                        units = wave.GetScale('x')['units']
-                        if units == 'nm':
-                            f.write("// Areas in nm²\n")
-                        else:
-                            f.write("// Areas in pixel²\n")
-                    elif wave_name == 'Volumes':
-                        units = wave.GetScale('x')['units']
-                        if units == 'nm':
-                            f.write("// Volumes in nm² × intensity units\n")
-                        else:
-                            f.write("// Volumes in pixel² × intensity units\n")
-                    elif wave_name == 'AvgHeights':
-                        f.write("// Average heights in image intensity units\n")
-                    elif wave_name == 'COM':
-                        units = wave.GetScale('x')['units']
-                        if units == 'nm':
-                            f.write("// Center of mass coordinates in nm\n")
-                        else:
-                            f.write("// Center of mass coordinates in pixels\n")
-                    
                     if wave_name == 'COM':
-                        if len(wave.data) == 0 or wave.data.shape[0] == 0:
-                            f.write(f"{wave_name}[0][0]= {{}}\n")
-                        else:
-                            if len(wave.data.shape) != 2 or wave.data.shape[1] != 2:
-                                raise ValueError(f"Invalid COM data shape {wave.data.shape}")
-                            f.write(f"{wave_name}[0][0]= {{")
-                            for i, row in enumerate(wave.data):
-                                if i > 0:
-                                    f.write(",")
-                                x_formatted = format_igor_number(float(row[0]))
-                                y_formatted = format_igor_number(float(row[1]))
-                                f.write(f"{{{x_formatted},{y_formatted}}}")
-                            f.write("}\n")
+                        # For 2D waves (COM):
+                        f.write(f"// {wave_name} wave\n")
+                        f.write(f"// Dimensions: {wave.data.shape}\n")
+                        for row in wave.data:
+                            f.write('\t'.join([f"{val:.6e}" for val in row]) + '\n')
                     else:
-                        if len(wave.data) == 0:
-                            f.write(f"{wave_name}[0]= {{}}\n")
-                        else:
-                            f.write(f"{wave_name}[0]= {{")
-                            for i, value in enumerate(wave.data):
-                                if i > 0:
-                                    f.write(",")
-                                f.write(format_igor_number(float(value)))
-                            f.write("}\n")
-                            
-                    # Ensure file is flushed and verify it was written
+                        # For 1D waves (Heights, Areas, Volumes, AvgHeights):
+                        f.write(f"// {wave_name} wave\n")
+                        f.write(f"// NumPoints: {len(wave.data)}\n")
+                        for i, value in enumerate(wave.data):
+                            f.write(f"{value:.6e}\n")
+                    
                     f.flush()
                     os.fsync(f.fileno())
                     
-                # Verify file was written and contains data
+                # Force file system sync and verify
+                if not wave_file.exists():
+                    raise IOError(f"Failed to create {wave_file}")
+                    
                 file_size = wave_file.stat().st_size
                 if file_size == 0:
-                    raise ValueError(f"{wave_name} file is empty after write")
+                    raise IOError(f"File {wave_file} is empty (0 bytes)")
                     
-                # Verify file contains expected Igor Pro format
-                with open(wave_file, 'r') as verify_f:
-                    content = verify_f.read()
-                    if wave_name == 'COM':
-                        if f"{wave_name}[0][0]=" not in content:
-                            raise ValueError(f"{wave_name} file does not contain proper Igor Pro format")
-                    else:
-                        if f"{wave_name}[0]=" not in content:
-                            raise ValueError(f"{wave_name} file does not contain proper Igor Pro format")
-                
-                print(f"  {wave_name}: {file_size} bytes written and verified")
+                print(f"Wrote {wave_name}: {file_size} bytes")
                     
             except Exception as e:
                 raise ValueError(f"Failed to write {wave_name}: {e}")
@@ -2956,6 +2914,24 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
 
         print(
             f"Measurement wave sizes: Heights={len(heights_data)}, Areas={len(areas_data)}, Volumes={len(volumes_data)}, COM={len(com_data)}")
+
+        # When creating particle folders:
+        if 'particle_folders' in results and results['particle_folders']:
+            for particle_num, particle_data in results['particle_folders'].items():
+                particle_dir = full_path / f"Particle_{particle_num}"
+                particle_dir.mkdir(exist_ok=True)
+                
+                # Write mask data
+                if 'mask' in particle_data:
+                    mask_file = particle_dir / f"Mask_{particle_num}.txt"
+                    mask_data = particle_data['mask']
+                    with open(mask_file, 'w') as f:
+                        f.write(f"// Mask for Particle {particle_num}\n")
+                        f.write(f"// Dimensions: {mask_data.shape}\n")
+                        for row in mask_data:
+                            f.write('\t'.join([str(int(val)) for val in row]) + '\n')
+                        f.flush()
+                        os.fsync(f.fileno())
 
         for i in range(info_data.shape[0]):
             particle_folder = full_path / f"Particle_{i}"
