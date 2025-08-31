@@ -12,23 +12,36 @@ import tkinter as tk
 from tkinter import messagebox, ttk, simpledialog, scrolledtext
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from scipy import ndimage
+import logging
+from pathlib import Path
+import os
 
 from igor_compatibility import *
 from file_io import *
 from utilities import *
 from scale_space import *
 
+logger = logging.getLogger(__name__)
 
 
-def verify_analysis_results(results):
-    """Verify analysis results contain valid data before saving"""
-    if not results:
-        return False
-    if 'info' not in results or results['info'] is None:
-        return False
-    if results['info'].data.shape[0] == 0:
-        return False
-    return True
+
+
+
+def write_wave_file(filepath, data, wave_name):
+    """Write Igor-format wave data with verification"""
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(f"{wave_name}[0]= {{")
+        for i, value in enumerate(data):
+            if i > 0:
+                f.write(",")
+            f.write(f"{float(value):.15e}")
+        f.write("}\n")
+        f.flush()
+        os.fsync(f.fileno())
+    
+    # Verify
+    if not Path(filepath).exists() or Path(filepath).stat().st_size < 10:
+        raise IOError(f"Failed to write {filepath}")
 
 
 def format_igor_number(value):
@@ -750,11 +763,15 @@ def GetBlobDetectionParams():
     main_frame = ttk.Frame(dialog, padding="20")
     main_frame.pack(fill=tk.BOTH, expand=True)
 
-    ttk.Label(main_frame, text="Hessian Blob Parameters",
+    # Create main content frame that will NOT expand into button area
+    content_frame = ttk.Frame(main_frame)
+    content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 10))
+
+    ttk.Label(content_frame, text="Hessian Blob Parameters",
               font=('TkDefaultFont', 12, 'bold')).pack(pady=(0, 15))
 
     # Scale parameters
-    scale_frame = ttk.LabelFrame(main_frame, text="Scale-Space Parameters", padding="10")
+    scale_frame = ttk.LabelFrame(content_frame, text="Scale-Space Parameters", padding="10")
     scale_frame.pack(fill=tk.X, pady=5)
 
     ttk.Label(scale_frame, text="Minimum Size in Pixels").grid(row=0, column=0, sticky=tk.W)
@@ -770,7 +787,7 @@ def GetBlobDetectionParams():
     ttk.Entry(scale_frame, textvariable=scale_factor_var, width=15).grid(row=2, column=1, padx=5)
 
     # Detection parameters
-    detect_frame = ttk.LabelFrame(main_frame, text="Detection Parameters", padding="10")
+    detect_frame = ttk.LabelFrame(content_frame, text="Detection Parameters", padding="10")
     detect_frame.pack(fill=tk.X, pady=10)
 
     ttk.Label(detect_frame, text="Blob Strength Threshold (-2=interactive, -1=auto)").grid(row=0, column=0, sticky=tk.W)
@@ -814,24 +831,29 @@ def GetBlobDetectionParams():
         result[0] = None
         dialog.destroy()
 
-    # Ensure minimum dialog height for button visibility
-    dialog.minsize(700, 450)
+    # Create fixed button frame at bottom
+    button_frame = ttk.Frame(main_frame, height=50)
+    button_frame.pack(side=tk.BOTTOM, fill=tk.X, expand=False)
+    button_frame.pack_propagate(False)  # Prevent frame from shrinking
+
+    # Center buttons in frame
+    button_container = ttk.Frame(button_frame)
+    button_container.place(relx=0.5, rely=0.5, anchor='center')
+
+    continue_btn = ttk.Button(button_container, text="Continue", command=ok_clicked, width=15)
+    continue_btn.grid(row=0, column=0, padx=5)
+
+    cancel_btn = ttk.Button(button_container, text="Cancel", command=cancel_clicked, width=15)
+    cancel_btn.grid(row=0, column=1, padx=5)
+
+    # Force immediate rendering
     dialog.update_idletasks()
+    button_frame.update_idletasks()
+    continue_btn.update_idletasks()
 
-    # Force button frame to bottom with explicit pack
-    button_frame = ttk.Frame(main_frame)
-    button_frame.pack(side=tk.BOTTOM, pady=10, fill=tk.X, expand=False)
-    main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
-    # Explicit button creation with grid instead of pack for better control
-    continue_btn = ttk.Button(button_frame, text="Continue", command=ok_clicked)
-    continue_btn.grid(row=0, column=0, padx=5, pady=5, sticky='ew')
-    cancel_btn = ttk.Button(button_frame, text="Cancel", command=cancel_clicked)  
-    cancel_btn.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
-
-    # Configure grid weights
-    button_frame.grid_columnconfigure(0, weight=1)
-    button_frame.grid_columnconfigure(1, weight=1)
+    # Ensure minimum height includes buttons
+    dialog.minsize(700, 500)
+    dialog.geometry("700x500")
     
     # Multiple update cycles to ensure rendering
     for _ in range(3):
@@ -1260,7 +1282,7 @@ class ThresholdSelectionWindow:
             try:
                 from particle_measurements import MeasureParticles
                 MeasureParticles(self.im, info)
-                print(f"DEBUG: Calculated measurements for {info.data.shape[0]} interactive blobs")
+                logger.debug(f"Calculated measurements for {info.data.shape[0]} interactive blobs")
             except Exception as e:
                 print(f"ERROR in MeasureParticles for interactive threshold: {e}")
                 import traceback
@@ -1323,26 +1345,23 @@ class ThresholdSelectionWindow:
             self.result = self.current_thresh
             # Make sure we have the latest blob info
             if not hasattr(self, 'current_blob_info') or self.current_blob_info is None:
-                print("DEBUG: Forcing update_display to get blob info")
+                logger.debug("Forcing update_display to get blob info")
                 self.update_display()  # Force update to get blob info
 
             # Store maps for later retrieval
             if hasattr(self, 'current_SS_MAXMAP') and self.current_SS_MAXMAP is not None:
-                print("DEBUG: SS_MAXMAP available from interactive threshold")
+                logger.debug("SS_MAXMAP available from interactive threshold")
 
             if hasattr(self, 'current_SS_MAXSCALEMAP') and self.current_SS_MAXSCALEMAP is not None:
-                print("DEBUG: SS_MAXSCALEMAP available from interactive threshold")
+                logger.debug("SS_MAXSCALEMAP available from interactive threshold")
 
-            print(f"=== ACCEPT THRESHOLD DEBUG ===")
-            print(f"Accepting threshold: {self.result}")
-            print(f"Blob info exists: {self.current_blob_info is not None}")
+            logger.info(f"InteractiveThreshold: Accepting threshold {self.result}")
+            logger.debug(f"Blob info exists: {self.current_blob_info is not None}")
             if self.current_blob_info:
-                print(f"Blob info shape: {self.current_blob_info.data.shape}")
-            print(f"===============================")
-            print("DEBUG: About to quit mainloop and destroy root window...")
+                logger.debug(f"Blob info shape: {self.current_blob_info.data.shape}")
             self.root.quit()  # Exit mainloop first
             self.root.destroy()  # Then destroy window
-            print("DEBUG: Root window quit and destroyed successfully")
+            logger.debug("Root window quit and destroyed successfully")
         except Exception as e:
             print(f"ERROR in accept_threshold: {e}")
             import traceback
@@ -1459,7 +1478,7 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
     interactive_SS_MAXSCALEMAP = None
 
     if detHResponseThresh == -2:  # Interactive threshold
-        print("=== INTERACTIVE THRESHOLD DEBUG ===")
+        logger.info("InteractiveThreshold: Initializing")
         print("detHResponseThresh is -2 - calling InteractiveThreshold...")
         try:
             threshold_result = InteractiveThreshold(im, detH, LG, particleType, maxCurvatureRatio)
@@ -1730,6 +1749,33 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
         com.data = com.data[:accepted_particles, :]
         print(f"Applied constraints: {accepted_particles} particles accepted out of {numPotentialParticles}")
         
+    # Convert measurements to physical units if image has scaling
+    x_scale = original.GetScale('x')
+    y_scale = original.GetScale('y')
+    z_scale = original.GetScale('z')
+
+    x_units = x_scale.get('units', '')
+    y_units = y_scale.get('units', '')
+    z_units = z_scale.get('units', '')
+
+    pixel_area = x_scale['delta'] * y_scale['delta']
+    pixel_volume = pixel_area * z_scale.get('delta', 1.0)
+
+    # Apply physical scaling to measurements
+    if x_units and y_units:  # Has physical calibration
+        areas.data *= pixel_area
+        volumes.data *= pixel_volume
+        
+        # Update COM to physical coordinates
+        for i in range(len(com.data)):
+            com.data[i][0] *= x_scale['delta']
+            com.data[i][1] *= y_scale['delta']
+        
+        # Add units to wave notes
+        areas.note = f"Units: {x_units}*{y_units}"
+        volumes.note = f"Units: {x_units}*{y_units}*{z_units if z_units else 'pixels'}"
+        heights.note = f"Units: {z_units if z_units else 'pixels'}"
+
     # Ensure measurement waves maintain proper scaling after resize
     for wave in [volumes, heights, areas, avg_heights, com]:
         for axis in ['x', 'y']:
@@ -2167,12 +2213,12 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
     import datetime
     import numpy as np
 
-    print(f"=== SAVE BATCH RESULTS DEBUG ===")
-    print(f"Function called with:")
-    print(f"  output_path: {output_path}")
-    print(f"  save_format: {save_format}")
-    print(f"  batch_results type: {type(batch_results)}")
-    print(f"  batch_results keys: {list(batch_results.keys()) if batch_results else 'None'}")
+    logger.info("SaveBatchResults: Starting batch save operation")
+    logger.debug(f"Output path: {output_path}, format: {save_format}")
+    if batch_results:
+        logger.debug(f"Batch results keys: {list(batch_results.keys())}")
+    else:
+        logger.warning("No batch results provided")
 
     # Verify batch results contain valid data
     if not batch_results:
@@ -2226,7 +2272,7 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
         # Save Parameters wave with validation
         params_file = series_path / "Parameters.txt"
         try:
-            with open(params_file, 'w') as f:
+            with open(params_file, 'w', encoding='utf-8', newline='\n') as f:
                 # Validate Parameters wave exists and has data
                 if 'Parameters' not in batch_results or batch_results['Parameters'] is None:
                     print("ERROR: Parameters wave missing from batch results")
@@ -2357,63 +2403,35 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                 raise ValueError(f"Wave {wave_name} data is None")
             
             try:
-                with open(wave_file, 'w') as f:
-                    # Write Igor Pro header comments
-                    f.write(f"// Igor Pro {wave_name} Wave (Batch Results)\n")
-                    if wave_name == 'AllHeights':
-                        f.write("// All particle heights in image intensity units\n")
-                    elif wave_name == 'AllAreas':
-                        f.write("// All particle areas in physical units (nm² if calibrated, pixel² otherwise)\n")
-                    elif wave_name == 'AllVolumes':
-                        f.write("// All particle volumes in physical units × intensity\n")
-                    elif wave_name == 'AllAvgHeights':
-                        f.write("// All particle average heights in image intensity units\n")
-                    elif wave_name == 'AllCOM':
-                        f.write("// All particle center of mass coordinates (nm if calibrated, pixels otherwise)\n")
-                    
-                    # Verify data arrays are not empty before writing
-                    if wave_name != 'AllCOM':
-                        if len(wave.data) == 0:
-                            print(f"WARNING: {wave_name} data array is empty")
-                        else:
-                            # Verify numerical values
-                            if not np.all(np.isfinite(wave.data)):
-                                print(f"WARNING: {wave_name} contains invalid values (inf/nan)")
+                # Verify data arrays are not empty before writing
+                if wave_name != 'AllCOM':
+                    if len(wave.data) == 0:
+                        logger.warning(f"{wave_name} data array is empty")
                     else:
-                        if wave.data.shape[0] == 0:
-                            print(f"WARNING: {wave_name} coordinate array is empty")
-                        else:
-                            if not np.all(np.isfinite(wave.data)):
-                                print(f"WARNING: {wave_name} contains invalid coordinates (inf/nan)")
+                        # Verify numerical values
+                        if not np.all(np.isfinite(wave.data)):
+                            logger.warning(f"{wave_name} contains invalid values (inf/nan)")
+                else:
+                    if wave.data.shape[0] == 0:
+                        logger.warning(f"{wave_name} coordinate array is empty")
+                    else:
+                        if not np.all(np.isfinite(wave.data)):
+                            logger.warning(f"{wave_name} contains invalid coordinates (inf/nan)")
 
-                    if wave_name == 'AllCOM':
-                        # For 2D waves (COM):
-                        f.write(f"// {wave_name} wave\n")
-                        f.write(f"// Dimensions: {wave.data.shape}\n")
-                        for row in wave.data:
-                            f.write('\t'.join([f"{val:.6e}" for val in row]) + '\n')
-                    else:
-                        # For 1D waves (Heights, Areas, Volumes, AvgHeights):
-                        f.write(f"// {wave_name} wave\n")
-                        f.write(f"// NumPoints: {len(wave.data)}\n")
-                        for i, value in enumerate(wave.data):
-                            f.write(f"{value:.6e}\n")
-                    
-                    f.flush()
-                    os.fsync(f.fileno())
+                if wave_name == 'AllCOM':
+                    # For 2D waves (COM): flatten to 1D for Igor format
+                    flat_data = wave.data.flatten()
+                    write_wave_file(str(wave_file), flat_data, wave_name)
+                else:
+                    # For 1D waves (Heights, Areas, Volumes, AvgHeights):
+                    write_wave_file(str(wave_file), wave.data, wave_name)
                         
-                # Force file system sync and verify
-                if not wave_file.exists():
-                    raise IOError(f"Failed to create {wave_file}")
-                    
+                # Verify file was written properly
                 file_size = wave_file.stat().st_size
-                if file_size == 0:
-                    raise IOError(f"File {wave_file} is empty (0 bytes)")
-                    
-                print(f"Wrote {wave_name}: {file_size} bytes")
+                logger.info(f"Wrote {wave_name}: {file_size} bytes")
                         
             except Exception as e:
-                print(f"ERROR: Failed to write {wave_name}: {e}")
+                logger.error(f"Failed to write {wave_name}: {e}")
                 raise
 
         # Create consolidated Info file for ViewParticles compatibility
@@ -2421,7 +2439,7 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
         print(f"Creating consolidated Info file: {info_file}")
         
         try:
-            with open(info_file, 'w') as f:
+            with open(info_file, 'w', encoding='utf-8', newline='\n') as f:
                 # Write Igor Pro header comments for consolidated batch info
                 f.write("// Igor Pro HessianBlobs Batch Info Wave (Consolidated)\n")
                 f.write("// Contains particle information from all analyzed images\n")
@@ -2521,16 +2539,16 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
             clean_image_name = "".join(c for c in clean_image_name if c.isalnum() or c in ('_', '-'))
 
             # Create individual image folder within Series_X
-            image_folder = os.path.join(series_path, f"{clean_image_name}_Particles")
-            os.makedirs(image_folder, exist_ok=True)
+            image_folder = series_path / f"{clean_image_name}_Particles"
+            image_folder.mkdir(parents=True, exist_ok=True, mode=0o755)
             print(f"Created image folder: {clean_image_name}_Particles")
 
             # Save complete individual image analysis results (same as SaveSingleImageResults)
             if results:
                 # Save all measurement waves for this image
                 if 'Heights' in results and results['Heights']:
-                    wave_file = os.path.join(image_folder, "Heights.txt")
-                    with open(wave_file, 'w') as f:
+                    wave_file = Path(image_folder) / "Heights.txt"
+                    with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
                         f.write(f"Heights[0]= {{")
                         for i, value in enumerate(results['Heights'].data):
                             if i > 0:
@@ -2539,8 +2557,8 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                         f.write("}\n")
 
                 if 'Areas' in results and results['Areas']:
-                    wave_file = os.path.join(image_folder, "Areas.txt")
-                    with open(wave_file, 'w') as f:
+                    wave_file = Path(image_folder) / "Areas.txt"
+                    with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
                         f.write(f"Areas[0]= {{")
                         for i, value in enumerate(results['Areas'].data):
                             if i > 0:
@@ -2549,8 +2567,8 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                         f.write("}\n")
 
                 if 'Volumes' in results and results['Volumes']:
-                    wave_file = os.path.join(image_folder, "Volumes.txt")
-                    with open(wave_file, 'w') as f:
+                    wave_file = Path(image_folder) / "Volumes.txt"
+                    with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
                         f.write(f"Volumes[0]= {{")
                         for i, value in enumerate(results['Volumes'].data):
                             if i > 0:
@@ -2559,8 +2577,8 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                         f.write("}\n")
 
                 if 'AvgHeights' in results and results['AvgHeights']:
-                    wave_file = os.path.join(image_folder, "AvgHeights.txt")
-                    with open(wave_file, 'w') as f:
+                    wave_file = Path(image_folder) / "AvgHeights.txt"
+                    with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
                         f.write(f"AvgHeights[0]= {{")
                         for i, value in enumerate(results['AvgHeights'].data):
                             if i > 0:
@@ -2569,8 +2587,8 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                         f.write("}\n")
 
                 if 'COM' in results and results['COM']:
-                    wave_file = os.path.join(image_folder, "COM.txt")
-                    with open(wave_file, 'w') as f:
+                    wave_file = Path(image_folder) / "COM.txt"
+                    with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
                         f.write(f"COM[0][0]= {{")
                         for i, row in enumerate(results['COM'].data):
                             if i > 0:
@@ -2582,8 +2600,8 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
 
                 # Save Info.txt for this image
                 if 'info' in results and results['info']:
-                    info_file = os.path.join(image_folder, "Info.txt")
-                    with open(info_file, 'w') as f:
+                    info_file = Path(image_folder) / "Info.txt"
+                    with open(info_file, 'w', encoding='utf-8', newline='\n') as f:
                         f.write("Info[0][0]= {")
                         for i, row in enumerate(results['info'].data):
                             if i > 0:
@@ -2598,12 +2616,12 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                     particle_count_this_image = 0
 
                     for i in range(info_data.shape[0]):
-                        particle_folder = os.path.join(image_folder, f"Particle_{i}")
-                        os.makedirs(particle_folder, exist_ok=True)
+                        particle_folder = Path(image_folder) / f"Particle_{i}"
+                        particle_folder.mkdir(parents=True, exist_ok=True, mode=0o755)
 
                         # Save complete particle info
-                        particle_info_file = os.path.join(particle_folder, "ParticleInfo.txt")
-                        with open(particle_info_file, 'w') as f:
+                        particle_info_file = Path(particle_folder) / "ParticleInfo.txt"
+                        with open(particle_info_file, 'w', encoding='utf-8', newline='\n') as f:
                             f.write(f"Particle {i} from {image_name}\n")
                             f.write("=" * 50 + "\n")
 
@@ -2703,13 +2721,12 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
     import numpy as np
     from pathlib import Path
 
-    print(f"=== SAVE SINGLE IMAGE DEBUG ===")
-    print(f"Function called with:")
-    print(f"  image_name: {image_name}")
-    print(f"  output_path: {output_path}")
-    print(f"  save_format: {save_format}")
-    print(f"  results type: {type(results)}")
-    print(f"  results keys: {list(results.keys()) if results else 'None'}")
+    logger.info("SaveSingleImageResults: Starting single image save operation")
+    logger.debug(f"Image: {image_name}, path: {output_path}, format: {save_format}")
+    if results:
+        logger.debug(f"Results keys: {list(results.keys())}")
+    else:
+        logger.warning("No results provided")
 
     # Verify analysis results contain valid data
     if not verify_analysis_results(results):
@@ -2806,32 +2823,17 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
                         print(f"WARNING: {wave_name} contains invalid coordinates (inf/nan)")
 
             try:
-                with open(wave_file, 'w') as f:
-                    if wave_name == 'COM':
-                        # For 2D waves (COM):
-                        f.write(f"// {wave_name} wave\n")
-                        f.write(f"// Dimensions: {wave.data.shape}\n")
-                        for row in wave.data:
-                            f.write('\t'.join([f"{val:.6e}" for val in row]) + '\n')
-                    else:
-                        # For 1D waves (Heights, Areas, Volumes, AvgHeights):
-                        f.write(f"// {wave_name} wave\n")
-                        f.write(f"// NumPoints: {len(wave.data)}\n")
-                        for i, value in enumerate(wave.data):
-                            f.write(f"{value:.6e}\n")
+                if wave_name == 'COM':
+                    # For 2D waves (COM): flatten to 1D for Igor format
+                    flat_data = wave.data.flatten()
+                    write_wave_file(str(wave_file), flat_data, wave_name)
+                else:
+                    # For 1D waves (Heights, Areas, Volumes, AvgHeights):
+                    write_wave_file(str(wave_file), wave.data, wave_name)
                     
-                    f.flush()
-                    os.fsync(f.fileno())
-                    
-                # Force file system sync and verify
-                if not wave_file.exists():
-                    raise IOError(f"Failed to create {wave_file}")
-                    
+                # Verify file was written properly
                 file_size = wave_file.stat().st_size
-                if file_size == 0:
-                    raise IOError(f"File {wave_file} is empty (0 bytes)")
-                    
-                print(f"Wrote {wave_name}: {file_size} bytes")
+                logger.info(f"Wrote {wave_name}: {file_size} bytes")
                     
             except Exception as e:
                 raise ValueError(f"Failed to write {wave_name}: {e}")
@@ -2851,7 +2853,7 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
         info_data = results['info'].data
         
         try:
-            with open(info_file, 'w') as f:
+            with open(info_file, 'w', encoding='utf-8', newline='\n') as f:
                 # Write Igor Pro header comments with column descriptions
                 f.write("// Igor Pro HessianBlobs Info Wave\n")
                 f.write("// Column descriptions:\n")
@@ -2902,70 +2904,49 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
         except Exception as e:
             raise ValueError(f"Failed to write Info.txt: {e}")
 
-        # Create individual particle folders (Particle_0, Particle_1, etc.)
+        # Save particle folders with actual data
         info_data = results['info'].data
-        print(f"Creating particle folders for {info_data.shape[0]} particles")
-
-        # Check if measurement waves have data
         heights_data = results['Heights'].data if 'Heights' in results and len(results['Heights'].data) > 0 else []
         areas_data = results['Areas'].data if 'Areas' in results and len(results['Areas'].data) > 0 else []
         volumes_data = results['Volumes'].data if 'Volumes' in results and len(results['Volumes'].data) > 0 else []
         com_data = results['COM'].data if 'COM' in results and results['COM'].data.shape[0] > 0 else []
-
-        print(
-            f"Measurement wave sizes: Heights={len(heights_data)}, Areas={len(areas_data)}, Volumes={len(volumes_data)}, COM={len(com_data)}")
-
-        # When creating particle folders:
-        if 'particle_folders' in results and results['particle_folders']:
-            for particle_num, particle_data in results['particle_folders'].items():
-                particle_dir = full_path / f"Particle_{particle_num}"
-                particle_dir.mkdir(exist_ok=True)
-                
-                # Write mask data
-                if 'mask' in particle_data:
-                    mask_file = particle_dir / f"Mask_{particle_num}.txt"
-                    mask_data = particle_data['mask']
-                    with open(mask_file, 'w') as f:
-                        f.write(f"// Mask for Particle {particle_num}\n")
-                        f.write(f"// Dimensions: {mask_data.shape}\n")
-                        for row in mask_data:
-                            f.write('\t'.join([str(int(val)) for val in row]) + '\n')
-                        f.flush()
-                        os.fsync(f.fileno())
-
-        for i in range(info_data.shape[0]):
-            particle_folder = full_path / f"Particle_{i}"
-            try:
-                particle_folder.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                print(f"ERROR creating particle folder {i}: {e}")
-                continue
-
-            # Save particle measurements in each particle folder with bounds checking
+        
+        accepted_particles = results['numParticles']
+        particle_folders = results.get('particle_folders', {})
+        mapNum_data = results.get('mapNum3D', {}).data if 'mapNum3D' in results else None
+        
+        for i in range(min(accepted_particles, len(particle_folders))):
+            particle_folder = Path(particle_folders[i])
+            
+            # Write particle image data
+            particle_image_file = particle_folder / f"Particle_{i}.npy"
+            if mapNum_data is not None:
+                particle_data = mapNum_data[mapNum_data == i]
+                if particle_data.size > 0:
+                    np.save(str(particle_image_file), particle_data)
+                    # Verify write
+                    if not particle_image_file.exists() or particle_image_file.stat().st_size == 0:
+                        raise IOError(f"Failed to write particle {i} data")
+            
+            # Write particle info with explicit formatting
             particle_info_file = particle_folder / "ParticleInfo.txt"
-            try:
-                with open(particle_info_file, 'w') as f:
-                    f.write(f"Particle {i} Information\n")
-                    f.write(f"Height: {heights_data[i] if i < len(heights_data) else 'N/A'}\n")
-                    f.write(f"Area: {areas_data[i] if i < len(areas_data) else 'N/A'}\n")
-                    f.write(f"Volume: {volumes_data[i] if i < len(volumes_data) else 'N/A'}\n")
+            with open(particle_info_file, 'w', encoding='utf-8') as f:
+                f.write(f"Particle {i} Information\n")
+                f.write(f"Height: {heights_data[i] if i < len(heights_data) else 0.0:.6e}\n")
+                f.write(f"Area: {areas_data[i] if i < len(areas_data) else 0.0:.6e}\n")
+                f.write(f"Volume: {volumes_data[i] if i < len(volumes_data) else 0.0:.6e}\n")
+                if i < len(com_data) and len(com_data[i]) >= 2:
+                    f.write(f"Center: ({com_data[i][0]:.6f}, {com_data[i][1]:.6f})\n")
+                f.flush()
+                os.fsync(f.fileno())
 
-                    # Safe COM access with bounds checking
-                    if i < len(com_data) and len(com_data[i]) >= 2:
-                        f.write(f"Center: ({com_data[i][0]:.2f}, {com_data[i][1]:.2f})\n")
-                    else:
-                        f.write("Center: N/A\n")
-                    
-            except Exception as e:
-                print(f"ERROR saving ParticleInfo.txt for particle {i}: {e}")
-
-        print(f"Single image analysis exported successfully to {full_path}")
+        logger.info("HessianBlobs: Single image analysis exported")
 
     elif save_format == "csv":
         # CSV format for Excel
         import csv
-        csv_file = os.path.join(full_path, f"{image_name}_particles.csv")
-        with open(csv_file, 'w', newline='') as f:
+        csv_file = full_path / f"{image_name}_particles.csv"
+        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(['# Hessian Blob Analysis Results'])
             writer.writerow(['# Image:', image_name])
@@ -3014,9 +2995,7 @@ def ViewParticleData(info_wave, image_name, original_image=None):
             messagebox.showwarning("No Particles", "No particles to view.")
             return
 
-        print(f"DEBUG ViewParticleData: Creating viewer with {info_wave.data.shape[0]} particles")
-        print(f"DEBUG ViewParticleData: Image name: {image_name}")
-        print(f"DEBUG ViewParticleData: Original image type: {type(original_image)}")
+        logger.debug(f"ViewParticleData: Creating viewer with {info_wave.data.shape[0]} particles")
 
         # Validate original image data
         if original_image is None:
@@ -3028,7 +3007,7 @@ def ViewParticleData(info_wave, image_name, original_image=None):
         ViewParticles(original_image, info_wave)
 
     except Exception as e:
-        print(f"DEBUG ViewParticleData error: {str(e)}")
+        logger.error(f"ViewParticleData error: {str(e)}")
         import traceback
         traceback.print_exc()
         messagebox.showerror("ViewParticles Error", f"Error creating particle viewer:\n{str(e)}")
@@ -3039,7 +3018,7 @@ class ParticleViewer:
 
     def __init__(self, info_wave, image_name, original_image=None):
         try:
-            print(f"DEBUG ParticleViewer init: Starting initialization")
+            logger.debug("ParticleViewer: Starting initialization")
             self.info_wave = info_wave
             self.image_name = image_name
             self.original_image = original_image
@@ -3054,7 +3033,7 @@ class ParticleViewer:
             self.x_range = -1  # -1 = autoscale
             self.y_range = -1  # -1 = autoscale
 
-            print(f"DEBUG ParticleViewer init: Creating window for {self.num_particles} particles")
+            logger.debug(f"ParticleViewer: Creating window for {self.num_particles} particles")
 
             self.root = tk.Toplevel()
             self.root.title("Particle Viewer")
@@ -3062,12 +3041,11 @@ class ParticleViewer:
             self.root.transient()
             self.root.focus_set()
 
-            print(f"DEBUG ParticleViewer init: Calling setup_viewer")
             self.setup_viewer()
-            print(f"DEBUG ParticleViewer init: Initialization complete")
+            logger.debug("ParticleViewer: Initialization complete")
 
         except Exception as e:
-            print(f"DEBUG ParticleViewer init error: {str(e)}")
+            logger.error(f"ParticleViewer init error: {str(e)}")
             import traceback
             traceback.print_exc()
             raise
@@ -3075,7 +3053,7 @@ class ParticleViewer:
     def setup_viewer(self):
         """Setup the particle viewer interface"""
         try:
-            print(f"DEBUG setup_viewer: Creating Igor Pro style layout")
+            logger.debug("Setting up Igor Pro style layout")
 
             main_container = ttk.Frame(self.root)
             main_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -3202,7 +3180,7 @@ class ParticleViewer:
             self.display_current_particle()
 
         except Exception as e:
-            print(f"DEBUG setup_viewer error: {str(e)}")
+            logger.error(f"setup_viewer error: {str(e)}")
             import traceback
             traceback.print_exc()
             raise
