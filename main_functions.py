@@ -20,6 +20,17 @@ from scale_space import *
 
 
 
+def verify_analysis_results(results):
+    """Verify analysis results contain valid data before saving"""
+    if not results:
+        return False
+    if 'info' not in results or results['info'] is None:
+        return False
+    if results['info'].data.shape[0] == 0:
+        return False
+    return True
+
+
 def format_igor_number(value):
     """
     Format numbers like Igor Pro export format
@@ -503,9 +514,14 @@ def Duplicate(source_wave, new_name):
 
 def ExtractBlobInfo(SS_MAXMAP, SS_MAXSCALEMAP, min_response, subPixelMult=1, allowOverlap=0):
     """
-    Extract blob information from maxima maps
+    Extract blob information from maxima maps with physical scaling
     """
     print("Extracting blob information...")
+
+    # Get scaling information for physical units
+    x_scale = SS_MAXMAP.GetScale('x')
+    y_scale = SS_MAXMAP.GetScale('y')
+    pixel_area = x_scale['delta'] * y_scale['delta']
 
     # Find pixels above threshold
     valid_pixels = np.where(SS_MAXMAP.data >= min_response)
@@ -529,10 +545,14 @@ def ExtractBlobInfo(SS_MAXMAP, SS_MAXSCALEMAP, min_response, subPixelMult=1, all
 
         radius = np.sqrt(2 * scale)
 
+        # Calculate area in physical units (pixels to nm²)
+        num_pixels = np.pi * radius * radius
+        area_physical = num_pixels * pixel_area
+
         # Fill 15-column Igor Pro Info wave structure
         blob_info[idx, 0] = x_coord          # P_Seed (x position)
         blob_info[idx, 1] = y_coord          # Q_Seed (y position)
-        blob_info[idx, 2] = 1                # numPixels (initial estimate)
+        blob_info[idx, 2] = num_pixels       # numPixels (estimated area in pixels)
         blob_info[idx, 3] = response         # maxBlobStrength
         blob_info[idx, 4] = max(0, x_coord-int(radius))  # pStart
         blob_info[idx, 5] = min(SS_MAXMAP.data.shape[1]-1, x_coord+int(radius))  # pStop
@@ -543,7 +563,7 @@ def ExtractBlobInfo(SS_MAXMAP, SS_MAXSCALEMAP, min_response, subPixelMult=1, all
         blob_info[idx, 10] = 1               # inBounds (will be updated later)
         blob_info[idx, 11] = 0               # height (will be measured later)
         blob_info[idx, 12] = 0               # volume (will be measured later)
-        blob_info[idx, 13] = 0               # area (will be measured later)
+        blob_info[idx, 13] = area_physical   # area in physical units (nm² if calibrated)
         blob_info[idx, 14] = 0               # particleNum (will be assigned later)
 
     # Filter overlapping blobs if not allowed
@@ -552,8 +572,10 @@ def ExtractBlobInfo(SS_MAXMAP, SS_MAXSCALEMAP, min_response, subPixelMult=1, all
 
     print(f"Final blob count after filtering: {blob_info.shape[0]}")
 
-    # Create output wave
+    # Create output wave with scaling metadata
     info_wave = Wave(blob_info, "info")
+    info_wave.SetScale('x', x_scale['offset'], x_scale['delta'], x_scale['units'])
+    info_wave.SetScale('y', y_scale['offset'], y_scale['delta'], y_scale['units'])
     return info_wave
 
 
@@ -1558,6 +1580,12 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
     com = Wave(np.zeros((numPotentialParticles, 2)), "COM")  # Center of mass
     areas = Wave(np.zeros(numPotentialParticles), "Areas")
     avg_heights = Wave(np.zeros(numPotentialParticles), "AvgHeights")
+    
+    # Copy physical scaling from original image to measurement waves
+    for wave in [volumes, heights, areas, avg_heights, com]:
+        for axis in ['x', 'y']:
+            scale_info = im.GetScale(axis)
+            wave.SetScale(axis, scale_info['offset'], scale_info['delta'], scale_info['units'])
 
     print("Cropping and measuring particles..")
 
@@ -1697,6 +1725,12 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
         avg_heights.data = avg_heights.data[:accepted_particles]
         com.data = com.data[:accepted_particles, :]
         print(f"Applied constraints: {accepted_particles} particles accepted out of {numPotentialParticles}")
+        
+    # Ensure measurement waves maintain proper scaling after resize
+    for wave in [volumes, heights, areas, avg_heights, com]:
+        for axis in ['x', 'y']:
+            scale_info = im.GetScale(axis)
+            wave.SetScale(axis, scale_info['offset'], scale_info['delta'], scale_info['units'])
 
     # Create mapNum wave from 3D array
     mapNum.data = np.sum(mapNum_data, axis=2)  # Collapse 3D to 2D for visualization
@@ -1871,6 +1905,13 @@ def BatchHessianBlobs(images_dict, params=None):
     all_areas = Wave(np.array([]), "AllAreas")
     all_avg_heights = Wave(np.array([]), "AllAvgHeights")
     all_com = Wave(np.array([]).reshape(0, 2), "AllCOM")  # Center of mass data for ViewParticles
+    
+    # Get scaling from first image for batch waves
+    first_image = next(iter(images_dict.values()))
+    for wave in [all_heights, all_volumes, all_areas, all_avg_heights, all_com]:
+        for axis in ['x', 'y']:
+            scale_info = first_image.GetScale(axis)
+            wave.SetScale(axis, scale_info['offset'], scale_info['delta'], scale_info['units'])
 
     # Store individual image results
     image_results = {}
@@ -2111,9 +2152,18 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
     print(f"  batch_results type: {type(batch_results)}")
     print(f"  batch_results keys: {list(batch_results.keys()) if batch_results else 'None'}")
 
+    # Verify batch results contain valid data
     if not batch_results:
         print("ERROR: No batch results provided!")
         raise ValueError("No batch results provided to save")
+        
+    # Verify each image's results
+    if 'image_results' in batch_results:
+        for image_name, image_result in batch_results['image_results'].items():
+            if not verify_analysis_results(image_result):
+                print(f"WARNING: Image {image_name} contains no valid analysis data")
+    else:
+        print("WARNING: No image_results found in batch_results")
 
     if not output_path:
         output_path = Path.cwd()
@@ -2286,6 +2336,19 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
             
             try:
                 with open(wave_file, 'w') as f:
+                    # Write Igor Pro header comments
+                    f.write(f"// Igor Pro {wave_name} Wave (Batch Results)\n")
+                    if wave_name == 'AllHeights':
+                        f.write("// All particle heights in image intensity units\n")
+                    elif wave_name == 'AllAreas':
+                        f.write("// All particle areas in physical units (nm² if calibrated, pixel² otherwise)\n")
+                    elif wave_name == 'AllVolumes':
+                        f.write("// All particle volumes in physical units × intensity\n")
+                    elif wave_name == 'AllAvgHeights':
+                        f.write("// All particle average heights in image intensity units\n")
+                    elif wave_name == 'AllCOM':
+                        f.write("// All particle center of mass coordinates (nm if calibrated, pixels otherwise)\n")
+                    
                     # Use Igor Pro wave format with proper number formatting
                     if wave_name == 'AllCOM':
                         print(f"Saving AllCOM with shape: {wave.data.shape}")
@@ -2344,6 +2407,23 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                         f.flush()
                         os.fsync(f.fileno())
                         
+                # Verify file was written and contains data
+                file_size = wave_file.stat().st_size
+                if file_size == 0:
+                    raise ValueError(f"{wave_name} file is empty after write")
+                    
+                # Verify file contains expected Igor Pro format
+                with open(wave_file, 'r') as verify_f:
+                    content = verify_f.read()
+                    if wave_name == 'AllCOM':
+                        if f"{wave_name}[0][0]=" not in content:
+                            raise ValueError(f"{wave_name} file does not contain proper Igor Pro format")
+                    else:
+                        if f"{wave_name}[0]=" not in content:
+                            raise ValueError(f"{wave_name} file does not contain proper Igor Pro format")
+                
+                print(f"  {wave_name}: {file_size} bytes written and verified")
+                        
             except Exception as e:
                 print(f"ERROR: Failed to write {wave_name}: {e}")
                 raise
@@ -2354,6 +2434,26 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
         
         try:
             with open(info_file, 'w') as f:
+                # Write Igor Pro header comments for consolidated batch info
+                f.write("// Igor Pro HessianBlobs Batch Info Wave (Consolidated)\n")
+                f.write("// Contains particle information from all analyzed images\n")
+                f.write("// Column descriptions:\n")
+                f.write("// 0: P_Seed (X coordinate)\n")
+                f.write("// 1: Q_Seed (Y coordinate)\n")
+                f.write("// 2: numPixels (area in pixels)\n")
+                f.write("// 3: maxBlobStrength (detector response)\n")
+                f.write("// 4: pStart (X boundary start)\n")
+                f.write("// 5: pStop (X boundary end)\n")
+                f.write("// 6: qStart (Y boundary start)\n")
+                f.write("// 7: qStop (Y boundary end)\n")
+                f.write("// 8: scale (characteristic scale)\n")
+                f.write("// 9: radius (estimated radius)\n")
+                f.write("// 10: inBounds (boundary flag)\n")
+                f.write("// 11: height (maximum intensity)\n")
+                f.write("// 12: volume (integrated intensity)\n")
+                f.write("// 13: area (physical area in nm² if calibrated)\n")
+                f.write("// 14: particleNum (particle number)\n")
+                
                 # Create consolidated info array from all images
                 all_info_data = []
                 for image_name, results in batch_results['image_results'].items():
@@ -2382,6 +2482,19 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
                 # Ensure file is flushed
                 f.flush()
                 os.fsync(f.fileno())
+                
+            # Verify consolidated Info file was written
+            info_file_size = info_file.stat().st_size
+            if info_file_size == 0:
+                raise ValueError("Consolidated Info.txt file is empty after write")
+                
+            # Verify file contains expected Igor Pro format
+            with open(info_file, 'r') as verify_f:
+                content = verify_f.read()
+                if "Info[0][0]=" not in content:
+                    raise ValueError("Consolidated Info.txt file does not contain proper Igor Pro format")
+                    
+            print(f"  Consolidated Info.txt: {info_file_size} bytes written and verified")
                 
         except Exception as e:
             print(f"ERROR: Failed to write Info.txt: {e}")
@@ -2610,9 +2723,10 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
     print(f"  results type: {type(results)}")
     print(f"  results keys: {list(results.keys()) if results else 'None'}")
 
-    if not results:
-        print("ERROR: No results provided!")
-        raise ValueError("No results provided to save")
+    # Verify analysis results contain valid data
+    if not verify_analysis_results(results):
+        print("ERROR: Analysis results validation failed!")
+        raise ValueError("Analysis results contain no valid data")
 
     if not output_path:
         output_path = Path.cwd()
@@ -2669,6 +2783,7 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
             wave_file = full_path / f"{wave_name}.txt"
             print(f"Saving {wave_name} to {wave_file}")
 
+            # Validate wave data before writing
             if wave is None:
                 print(f"ERROR: Wave {wave_name} is None!")
                 raise ValueError(f"Wave {wave_name} is None")
@@ -2680,9 +2795,40 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
             if wave.data is None:
                 print(f"ERROR: Wave {wave_name} data is None!")
                 raise ValueError(f"Wave {wave_name} data is None")
+                
+            # Check if wave contains actual measurement data
+            if wave_name != 'COM' and len(wave.data) == 0:
+                print(f"WARNING: Wave {wave_name} contains no data - writing empty wave")
+            elif wave_name == 'COM' and (len(wave.data) == 0 or wave.data.shape[0] == 0):
+                print(f"WARNING: Wave {wave_name} contains no coordinate data - writing empty wave")
 
             try:
                 with open(wave_file, 'w') as f:
+                    # Write Igor Pro header comments with measurement units
+                    f.write(f"// Igor Pro {wave_name} Wave\n")
+                    if wave_name == 'Heights':
+                        f.write("// Heights in image intensity units\n")
+                    elif wave_name == 'Areas':
+                        units = wave.GetScale('x')['units']
+                        if units == 'nm':
+                            f.write("// Areas in nm²\n")
+                        else:
+                            f.write("// Areas in pixel²\n")
+                    elif wave_name == 'Volumes':
+                        units = wave.GetScale('x')['units']
+                        if units == 'nm':
+                            f.write("// Volumes in nm² × intensity units\n")
+                        else:
+                            f.write("// Volumes in pixel² × intensity units\n")
+                    elif wave_name == 'AvgHeights':
+                        f.write("// Average heights in image intensity units\n")
+                    elif wave_name == 'COM':
+                        units = wave.GetScale('x')['units']
+                        if units == 'nm':
+                            f.write("// Center of mass coordinates in nm\n")
+                        else:
+                            f.write("// Center of mass coordinates in pixels\n")
+                    
                     if wave_name == 'COM':
                         if len(wave.data) == 0 or wave.data.shape[0] == 0:
                             f.write(f"{wave_name}[0][0]= {{}}\n")
@@ -2712,10 +2858,22 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
                     f.flush()
                     os.fsync(f.fileno())
                     
-                # Verify file was written
+                # Verify file was written and contains data
                 file_size = wave_file.stat().st_size
                 if file_size == 0:
                     raise ValueError(f"{wave_name} file is empty after write")
+                    
+                # Verify file contains expected Igor Pro format
+                with open(wave_file, 'r') as verify_f:
+                    content = verify_f.read()
+                    if wave_name == 'COM':
+                        if f"{wave_name}[0][0]=" not in content:
+                            raise ValueError(f"{wave_name} file does not contain proper Igor Pro format")
+                    else:
+                        if f"{wave_name}[0]=" not in content:
+                            raise ValueError(f"{wave_name} file does not contain proper Igor Pro format")
+                
+                print(f"  {wave_name}: {file_size} bytes written and verified")
                     
             except Exception as e:
                 raise ValueError(f"Failed to write {wave_name}: {e}")
@@ -2736,6 +2894,25 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
         
         try:
             with open(info_file, 'w') as f:
+                # Write Igor Pro header comments with column descriptions
+                f.write("// Igor Pro HessianBlobs Info Wave\n")
+                f.write("// Column descriptions:\n")
+                f.write("// 0: P_Seed (X coordinate)\n")
+                f.write("// 1: Q_Seed (Y coordinate)\n")
+                f.write("// 2: numPixels (area in pixels)\n")
+                f.write("// 3: maxBlobStrength (detector response)\n")
+                f.write("// 4: pStart (X boundary start)\n")
+                f.write("// 5: pStop (X boundary end)\n")
+                f.write("// 6: qStart (Y boundary start)\n")
+                f.write("// 7: qStop (Y boundary end)\n")
+                f.write("// 8: scale (characteristic scale)\n")
+                f.write("// 9: radius (estimated radius)\n")
+                f.write("// 10: inBounds (boundary flag)\n")
+                f.write("// 11: height (maximum intensity)\n")
+                f.write("// 12: volume (integrated intensity)\n")
+                f.write("// 13: area (physical area in nm² if calibrated)\n")
+                f.write("// 14: particleNum (particle number)\n")
+                
                 if len(info_data) == 0 or info_data.shape[0] == 0:
                     f.write("Info[0][0]= {}\n")
                 else:
@@ -2751,10 +2928,18 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
                 f.flush()
                 os.fsync(f.fileno())
                 
-            # Verify Info file was written
+            # Verify Info file was written and contains data
             info_file_size = info_file.stat().st_size
             if info_file_size == 0:
                 raise ValueError("Info.txt file is empty after write")
+                
+            # Verify file contains expected Igor Pro format
+            with open(info_file, 'r') as verify_f:
+                content = verify_f.read()
+                if "Info[0][0]=" not in content:
+                    raise ValueError("Info.txt file does not contain proper Igor Pro format")
+                    
+            print(f"  Info.txt: {info_file_size} bytes written and verified")
                 
         except Exception as e:
             raise ValueError(f"Failed to write Info.txt: {e}")
