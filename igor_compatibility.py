@@ -19,6 +19,12 @@ class Wave:
 
     def __init__(self, data, name="", note=""):
         self.data = np.asarray(data)
+        self.scales = {
+            'x': {'offset': 0.0, 'delta': 1.0, 'units': ''},
+            'y': {'offset': 0.0, 'delta': 1.0, 'units': ''},
+            'z': {'offset': 0.0, 'delta': 1.0, 'units': ''}
+        }
+        self.data_units = ''  # Units for the data values (e.g., 'nm' for height)
         self.name = name
         self.note = note
 
@@ -30,16 +36,22 @@ class Wave:
             't': {'offset': 0.0, 'delta': 1.0, 'units': ''}
         }
 
-    def SetScale(self, axis, offset, delta, units=""):
-        """Set scaling for specified axis"""
-        if axis.lower() in self._scaling:
-            self._scaling[axis.lower()]['offset'] = offset
-            self._scaling[axis.lower()]['delta'] = delta
-            self._scaling[axis.lower()]['units'] = units
+    def SetScale(self, dimension, offset, delta, units=''):
+        """Set scale for a dimension (x, y, or z)"""
+        if dimension in self.scales:
+            self.scales[dimension] = {
+                'offset': offset,
+                'delta': delta,
+                'units': units
+            }
 
-    def GetScale(self, axis):
-        """Get scaling information for specified axis"""
-        return self._scaling.get(axis.lower(), {'offset': 0.0, 'delta': 1.0, 'units': ''})
+    def GetScale(self, dimension):
+        """Get scale for a dimension (x, y, or z)"""
+        return self.scales.get(dimension, {'offset': 0.0, 'delta': 1.0, 'units': ''})
+
+    def SetDataUnits(self, units):
+        """Set units for the data values (e.g., 'nm' for AFM height data)"""
+        self.data_units = units
 
     def __repr__(self):
         return f"Wave('{self.name}', shape={self.data.shape}, dtype={self.data.dtype})"

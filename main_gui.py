@@ -338,127 +338,127 @@ class HessianBlobGUI:
                 self.log_message(f"Applied AFM calibration to {filename}: {calibration['x_spacing']} x {calibration['y_spacing']} nm/pixel")
         
         return wave
-    
-    def get_afm_calibration_dialog(self, filename):
+
+    def get_afm_calibration_dialog(self, filename, mandatory=False):
         """
         Show dialog to get AFM image calibration parameters
-        Returns dict with x_spacing and y_spacing in nm/pixel
+        Returns dict with x_spacing, y_spacing in nm/pixel and z_units
         """
-        dialog = tk.Toplevel(self)
+        dialog = tk.Toplevel(self.root)
         dialog.title(f"AFM Calibration - {filename}")
-        dialog.geometry("450x300")
-        dialog.transient(self)
+        dialog.geometry("500x400")
+        dialog.transient(self.root)
         dialog.grab_set()
-        
+
         # Center dialog
         dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_reqwidth() // 2)
-        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_reqheight() // 2)
-        dialog.geometry(f"+{x}+{y}")
-        
+        x = (dialog.winfo_screenwidth() // 2) - 250
+        y = (dialog.winfo_screenheight() // 2) - 200
+        dialog.geometry(f"500x400+{x}+{y}")
+
         result = [None]
-        
+
         main_frame = ttk.Frame(dialog, padding="20")
         main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        ttk.Label(main_frame, text=f"AFM Image Calibration", 
+
+        ttk.Label(main_frame, text="AFM Image Calibration",
                   font=('TkDefaultFont', 12, 'bold')).pack(pady=(0, 10))
-        
+
         ttk.Label(main_frame, text=f"File: {filename}").pack(pady=(0, 15))
-        
-        # Information text
+
         info_text = (
-            "AFM images require physical pixel spacing for accurate measurements.\n"
-            "Typical AFM values range from 1-10 nm/pixel.\n\n"
-            "Please enter the pixel spacing in nanometers:"
+            "AFM images require physical calibration for accurate measurements.\n"
+            "Typical AFM pixel spacing: 0.5-10 nm/pixel\n"
+            "Typical AFM image size: 100-500 pixels\n\n"
+            "Please enter the calibration parameters:"
         )
         ttk.Label(main_frame, text=info_text, justify=tk.LEFT).pack(pady=(0, 15))
-        
-        # Input fields
+
+        # Input fields frame
         input_frame = ttk.Frame(main_frame)
         input_frame.pack(fill=tk.X, pady=10)
-        
+
         # X spacing
         ttk.Label(input_frame, text="X pixel spacing (nm/pixel):").grid(row=0, column=0, sticky=tk.W, pady=5)
-        x_spacing_var = tk.DoubleVar(value=2.0)  # Default AFM value
+        x_spacing_var = tk.DoubleVar(value=2.0)
         x_entry = ttk.Entry(input_frame, textvariable=x_spacing_var, width=15)
         x_entry.grid(row=0, column=1, padx=(10, 0), pady=5)
-        
+
         # Y spacing
         ttk.Label(input_frame, text="Y pixel spacing (nm/pixel):").grid(row=1, column=0, sticky=tk.W, pady=5)
-        y_spacing_var = tk.DoubleVar(value=2.0)  # Default AFM value
+        y_spacing_var = tk.DoubleVar(value=2.0)
         y_entry = ttk.Entry(input_frame, textvariable=y_spacing_var, width=15)
         y_entry.grid(row=1, column=1, padx=(10, 0), pady=5)
-        
-        # Square pixels option
+
+        # Z units
+        ttk.Label(input_frame, text="Z height units:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        z_units_var = tk.StringVar(value="nm")
+        z_units_combo = ttk.Combobox(input_frame, textvariable=z_units_var, width=13,
+                                     values=["nm", "µm", "Å", "pm"], state="readonly")
+        z_units_combo.grid(row=2, column=1, padx=(10, 0), pady=5)
+
+        # Square pixels checkbox
         square_var = tk.BooleanVar(value=True)
-        square_check = ttk.Checkbutton(input_frame, text="Square pixels (X=Y)", variable=square_var)
-        square_check.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=10)
-        
-        def on_x_change(*args):
-            if square_var.get():
-                y_spacing_var.set(x_spacing_var.get())
-        
+
         def on_square_change():
             if square_var.get():
                 y_spacing_var.set(x_spacing_var.get())
-                
+                y_entry.config(state='disabled')
+            else:
+                y_entry.config(state='normal')
+
+        square_check = ttk.Checkbutton(input_frame, text="Square pixels (X=Y)",
+                                       variable=square_var, command=on_square_change)
+        square_check.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=10)
+
+        # Link X to Y when square pixels is checked
+        def on_x_change(*args):
+            if square_var.get():
+                y_spacing_var.set(x_spacing_var.get())
+
         x_spacing_var.trace('w', on_x_change)
-        square_var.trace('w', lambda *args: on_square_change())
-        
-        # Preset buttons
-        preset_frame = ttk.LabelFrame(main_frame, text="Common AFM Presets", padding="10")
-        preset_frame.pack(fill=tk.X, pady=10)
-        
-        def set_preset(x_val, y_val):
-            x_spacing_var.set(x_val)
-            y_spacing_var.set(y_val)
-            
-        preset_buttons_frame = ttk.Frame(preset_frame)
-        preset_buttons_frame.pack()
-        
-        ttk.Button(preset_buttons_frame, text="1 nm/px", 
-                   command=lambda: set_preset(1.0, 1.0)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(preset_buttons_frame, text="2 nm/px", 
-                   command=lambda: set_preset(2.0, 2.0)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(preset_buttons_frame, text="5 nm/px", 
-                   command=lambda: set_preset(5.0, 5.0)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(preset_buttons_frame, text="10 nm/px", 
-                   command=lambda: set_preset(10.0, 10.0)).pack(side=tk.LEFT, padx=2)
-        
+
         def ok_clicked():
             try:
                 x_val = x_spacing_var.get()
                 y_val = y_spacing_var.get()
-                
+
                 if x_val <= 0 or y_val <= 0:
-                    messagebox.showerror("Invalid Input", "Pixel spacing must be positive values.")
+                    messagebox.showerror("Invalid Input",
+                                         "Pixel spacing must be positive values.")
                     return
-                    
+
                 result[0] = {
                     'x_spacing': x_val,
-                    'y_spacing': y_val
+                    'y_spacing': y_val,
+                    'z_units': z_units_var.get()
                 }
                 dialog.destroy()
             except tk.TclError:
                 messagebox.showerror("Invalid Input", "Please enter valid numeric values.")
-        
+
         def cancel_clicked():
             result[0] = None
             dialog.destroy()
-        
+
         # Buttons
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(side=tk.BOTTOM, pady=15, fill=tk.X)
-        
+
         ttk.Button(button_frame, text="OK", command=ok_clicked).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Cancel", command=cancel_clicked).pack(side=tk.LEFT, padx=5)
-        
+        if not mandatory:
+            ttk.Button(button_frame, text="Cancel", command=cancel_clicked).pack(side=tk.LEFT, padx=5)
+
         # Focus first entry
         x_entry.focus_set()
-        
+
+        # Bind Enter key to OK
+        dialog.bind('<Return>', lambda e: ok_clicked())
+        if not mandatory:
+            dialog.bind('<Escape>', lambda e: cancel_clicked())
+
         dialog.wait_window()
-        
+
         return result[0]
 
     def verify_saved_files(self, output_dir, image_name):

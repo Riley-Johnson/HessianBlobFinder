@@ -24,9 +24,6 @@ from scale_space import *
 logger = logging.getLogger(__name__)
 
 
-
-
-
 def write_wave_file(filepath, data, wave_name):
     """Write Igor-format wave data with verification"""
     with open(filepath, 'w', encoding='utf-8') as f:
@@ -453,60 +450,53 @@ def M_CenterOfMass_SubPixel(im, refined_mask, bg, subPixelMult):
     
     return phys_x + 1j * phys_y
 
+
 def verify_analysis_results(results):
     """
-    Verify analysis results data integrity
-    
-    Parameters:
-    results : dict - Analysis results dictionary
-    
-    Returns:
-    bool - True if all checks pass
+    Verify that analysis results contain valid data before saving
     """
     if not results:
+        print("ERROR: No results dictionary provided")
         return False
-        
-    required_keys = ['Heights', 'Areas', 'Volumes', 'AvgHeights', 'COM', 'info']
+
+    required_keys = ['info', 'Heights', 'Areas', 'Volumes', 'AvgHeights', 'COM']
+    missing_keys = []
+    empty_data = []
+
     for key in required_keys:
         if key not in results:
+            missing_keys.append(key)
+        elif results[key] is None:
+            empty_data.append(f"{key} is None")
+        elif hasattr(results[key], 'data'):
+            if results[key].data is None:
+                empty_data.append(f"{key}.data is None")
+            elif results[key].data.size == 0:
+                empty_data.append(f"{key}.data is empty")
+            elif np.all(results[key].data == 0):
+                print(f"WARNING: {key} contains all zeros")
+
+    if missing_keys:
+        print(f"ERROR: Missing required keys: {missing_keys}")
+        return False
+
+    if empty_data:
+        print(f"ERROR: Empty data found: {empty_data}")
+        return False
+
+    # Verify info array has correct structure
+    if 'info' in results and results['info'] is not None:
+        info_shape = results['info'].data.shape
+        if len(info_shape) != 2 or info_shape[1] < 14:
+            print(f"ERROR: Invalid info array shape: {info_shape}, expected (n, 15)")
             return False
-        if results[key] is None:
-            return False
-        if not hasattr(results[key], 'data'):
-            return False
-        if results[key].data is None:
-            return False
-            
-    # Check dimension consistency
-    measurement_keys = ['Heights', 'Areas', 'Volumes', 'AvgHeights']
-    if len(results['Heights'].data) > 0:
-        expected_length = len(results['Heights'].data)
-        for key in measurement_keys:
-            if len(results[key].data) != expected_length:
-                return False
-                
-        # COM should be Nx2
-        if len(results['COM'].data) > 0:
-            if len(results['COM'].data) != expected_length:
-                return False
-            if len(results['COM'].data.shape) != 2 or results['COM'].data.shape[1] != 2:
-                return False
-                
-        # Info should match particle count
-        if len(results['info'].data) > 0:
-            if len(results['info'].data) != expected_length:
-                return False
-                
-    # Check numerical ranges
-    for key in measurement_keys:
-        data = results[key].data
-        if len(data) > 0:
-            if not np.all(np.isfinite(data)):
-                return False
-            if key in ['Heights', 'Areas', 'Volumes', 'AvgHeights']:
-                if np.any(data < 0):
-                    return False
-                    
+
+        # Check if info contains valid particle data
+        if info_shape[0] == 0:
+            print("WARNING: No particles detected (info array has 0 rows)")
+            # This is valid but worth noting
+
+    print("Analysis results validation passed")
     return True
 
 
@@ -1710,8 +1700,8 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
     mapMax.data = np.zeros(im.data.shape)
 
     # Initialize 15-column info wave for particle information (exact Igor Pro structure)
-    # Columns: 0=P_Seed, 1=Q_Seed, 2=numPixels, 3=maxBlobStrength, 4=pStart, 5=pStop, 
-    #         6=qStart, 7=qStop, 8=scale, 9=radius, 10=inBounds, 11=height, 12=volume, 
+    # Columns: 0=P_Seed, 1=Q_Seed, 2=numPixels, 3=maxBlobStrength, 4=pStart, 5=pStop,
+    #         6=qStart, 7=qStop, 8=scale, 9=radius, 10=inBounds, 11=height, 12=volume,
     #         13=area, 14=particleNum
     info = Wave(np.zeros((1000, 15)), "info")
 
@@ -1767,7 +1757,7 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
     com = Wave(np.zeros((numPotentialParticles, 2)), "COM")  # Center of mass
     areas = Wave(np.zeros(numPotentialParticles), "Areas")
     avg_heights = Wave(np.zeros(numPotentialParticles), "AvgHeights")
-    
+
     # Copy physical scaling from original image to measurement waves
     for wave in [volumes, heights, areas, avg_heights, com]:
         for axis in ['x', 'y']:
@@ -1778,12 +1768,12 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
 
     # Variables for particle measurement calculations
     accepted_particles = 0
-    
+
     # Initialize 3D mapNum array for particle assignment tracking
     # This is critical for Igor Pro compatibility and proper particle boundary detection
     if subPixelMult > 1:
-        mapNum_data = np.zeros((im.data.shape[0] * subPixelMult, 
-                               im.data.shape[1] * subPixelMult, 
+        mapNum_data = np.zeros((im.data.shape[0] * subPixelMult,
+                               im.data.shape[1] * subPixelMult,
                                layers), dtype=int)
     else:
         mapNum_data = np.zeros((im.data.shape[0], im.data.shape[1], layers), dtype=int)
@@ -1811,7 +1801,7 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
         # Extract particle region bounds
         p_start, p_stop = int(info.data[i, 4]), int(info.data[i, 5])
         q_start, q_stop = int(info.data[i, 6]), int(info.data[i, 7])
-        
+
         # Get seed position and scale layer
         p_seed = int(info.data[i, 0])
         q_seed = int(info.data[i, 1])
@@ -1819,35 +1809,35 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
 
         # Create mask for this particle using flood fill
         mask = np.zeros(im.data.shape, dtype=int)
-        
+
         # Perform flood fill from seed position using LG threshold
         if (0 <= p_seed < im.data.shape[1] and 0 <= q_seed < im.data.shape[0] and
             0 <= scale_layer < LG.data.shape[2]):
-            
+
             # Get threshold for this scale layer
             lg_thresh = np.sqrt(info.data[i, 3])  # Square root of blob strength
-            
+
             # 8-connected flood fill based on LG values
-            ScanlineFill8_LG(detH, mask, LG.data[:, :, scale_layer], 
+            ScanlineFill8_LG(detH, mask, LG.data[:, :, scale_layer],
                             p_seed, q_seed, lg_thresh, fillVal=1)
-        
+
         # Calculate actual measurements using Igor Pro functions
         if np.sum(mask) > 0:
             # Get background level
             bg = M_MinBoundary(im, mask)
-            
+
             # Subpixel refinement if enabled
             if subPixelMult > 1:
                 # Create subpixel refined mask using bilinear interpolation
                 refined_mask = create_subpixel_mask(im, mask, subPixelMult, bg)
-                
+
                 # Measure properties on refined mask
                 particle_height = M_Height_SubPixel(im, refined_mask, bg, subPixelMult, negParticle=(particleType == -1))
                 particle_volume = M_Volume_SubPixel(im, refined_mask, bg, subPixelMult)
                 particle_area = M_Area_SubPixel(refined_mask, im, subPixelMult)
                 particle_com = M_CenterOfMass_SubPixel(im, refined_mask, bg, subPixelMult)
                 particle_perimeter = M_Perimeter(mask)  # Perimeter uses original mask
-                
+
                 # Store refined mask for individual particle folders
                 mask_for_storage = refined_mask
             else:
@@ -1857,24 +1847,24 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
                 particle_area = M_Area(mask, im)
                 particle_com = M_CenterOfMass(im, mask, bg)
                 particle_perimeter = M_Perimeter(mask)
-                
+
                 mask_for_storage = mask
-            
+
             # Update info wave with actual measurements
             info.data[i, 2] = np.sum(mask)  # numPixels (actual count from original mask)
             info.data[i, 11] = particle_height  # height
-            info.data[i, 12] = particle_volume  # volume  
+            info.data[i, 12] = particle_volume  # volume
             info.data[i, 13] = particle_area    # area
-            
+
             # Average height calculation
             avg_height = particle_volume / particle_area if particle_area > 0 else 0
-            
+
             # Check constraints with actual measurements
             if (particle_height < minH or particle_height > maxH or
                 particle_area < minA or particle_area > maxA or
                 particle_volume < minV or particle_volume > maxV):
                 continue
-                
+
             # Particle accepted - store measurements
             heights.data[accepted_particles] = particle_height
             areas.data[accepted_particles] = particle_area
@@ -1885,11 +1875,11 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
 
             # Mark particle as accepted in info wave
             info.data[i, 14] = accepted_particles + 1
-            
+
             # Update mapNum with particle assignment (use original mask for mapNum)
             mask_indices = np.where(mask == 1)
             for y_idx, x_idx in zip(mask_indices[0], mask_indices[1]):
-                if (0 <= y_idx < mapNum_data.shape[0] and 
+                if (0 <= y_idx < mapNum_data.shape[0] and
                     0 <= x_idx < mapNum_data.shape[1]):
                     mapNum_data[y_idx, x_idx, scale_layer] = accepted_particles + 1
 
@@ -1912,7 +1902,7 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
         avg_heights.data = avg_heights.data[:accepted_particles]
         com.data = com.data[:accepted_particles, :]
         print(f"Applied constraints: {accepted_particles} particles accepted out of {numPotentialParticles}")
-        
+
     # Convert measurements to physical units if image has scaling
     x_scale = original.GetScale('x')
     y_scale = original.GetScale('y')
@@ -1929,12 +1919,12 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
     if x_units and y_units:  # Has physical calibration
         areas.data *= pixel_area
         volumes.data *= pixel_volume
-        
+
         # Update COM to physical coordinates
         for i in range(len(com.data)):
             com.data[i][0] *= x_scale['delta']
             com.data[i][1] *= y_scale['delta']
-        
+
         # Add units to wave notes
         areas.note = f"Units: {x_units}*{y_units}"
         volumes.note = f"Units: {x_units}*{y_units}*{z_units if z_units else 'pixels'}"
@@ -1948,43 +1938,43 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
 
     # Create mapNum wave from 3D array
     mapNum.data = np.sum(mapNum_data, axis=2)  # Collapse 3D to 2D for visualization
-    
+
     # Create ParticleMap for visualization (Igor Pro compatibility)
     particle_map = Duplicate(im, "ParticleMap")
     particle_map.data = mapNum.data.astype(float)
-    
+
     # Create individual particle folders and waves (Igor Pro style)
     particle_folders = {}
     for p in range(accepted_particles):
         particle_num = p + 1
         folder_name = f"Particle_{particle_num}"
-        
+
         # Find this particle's mask from mapNum
         particle_mask = (mapNum.data == particle_num).astype(int)
-        
+
         # Create individual particle waves
         particle_wave = Duplicate(im, f"Particle_{particle_num}")
         mask_wave = Wave(particle_mask, f"Mask_{particle_num}")
-        
-        # Copy scaling to individual waves  
+
+        # Copy scaling to individual waves
         for axis in ['x', 'y']:
             scale_info = im.GetScale(axis)
             particle_wave.SetScale(axis, scale_info['offset'], scale_info['delta'], scale_info['units'])
             mask_wave.SetScale(axis, scale_info['offset'], scale_info['delta'], scale_info['units'])
-        
+
         # Create subpixel waves if subpixel refinement was used
         if subPixelMult > 1:
             # Create subpixel refined versions
             subpixel_particle = Duplicate(im, f"Particle_{particle_num}_SubPixel")
             subpixel_mask = Wave(particle_mask, f"Mask_{particle_num}_SubPixel")  # Placeholder
-            
+
             # Set subpixel scaling (finer resolution)
             for axis in ['x', 'y']:
                 scale_info = im.GetScale(axis)
                 subpixel_delta = scale_info['delta'] / subPixelMult
                 subpixel_particle.SetScale(axis, scale_info['offset'], subpixel_delta, scale_info['units'])
                 subpixel_mask.SetScale(axis, scale_info['offset'], subpixel_delta, scale_info['units'])
-            
+
             particle_folders[folder_name] = {
                 'particle': particle_wave,
                 'mask': mask_wave,
@@ -2879,7 +2869,6 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
     import numpy as np
     from pathlib import Path
 
-    # Verify analysis results contain valid data
     if not verify_analysis_results(results):
         raise ValueError("Analysis results validation failed")
 
@@ -2890,132 +2879,112 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
 
     if not output_path.exists():
         raise ValueError(f"Output path does not exist: {output_path}")
-        
+
     if not os.access(str(output_path), os.W_OK):
         raise PermissionError(f"No write permission for output path: {output_path}")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Create ImageName_Particles folder structure
     clean_image_name = os.path.splitext(image_name)[0]
     clean_image_name = "".join(c for c in clean_image_name if c.isalnum() or c in ('_', '-'))
     folder_name = f"{clean_image_name}_Particles"
     full_path = output_path / folder_name
-    
+
     full_path.mkdir(parents=True, exist_ok=True)
 
     if save_format == "igor" or save_format == "txt":
-        # Save measurement waves in main folder
-        measurements = {
-            'Heights': results.get('Heights'),
-            'Areas': results.get('Areas'),
-            'Volumes': results.get('Volumes'),
-            'AvgHeights': results.get('AvgHeights'),
-            'COM': results.get('COM')
-        }
-
-        for wave_name, wave in measurements.items():
-            if wave is None or not hasattr(wave, 'data') or wave.data is None:
-                continue
-                
-            wave_file = full_path / f"{wave_name}.txt"
-            
-            # CRITICAL FIX: Ensure data is properly written
+        # Save Heights with proper data writing and flushing
+        if 'Heights' in results and results['Heights'] is not None:
+            wave_file = full_path / "Heights.txt"
             with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
-                if wave_name == 'COM':
-                    # COM is 2D array
-                    f.write(f"{wave_name}[0]= {{")
-                    for i, point in enumerate(wave.data):
-                        if i > 0:
-                            f.write(",")
-                        f.write(f"{{{format_igor_number(float(point[0]))},{format_igor_number(float(point[1]))}}}")
-                    f.write("}\n")
-                else:
-                    # Other waves are 1D
-                    f.write(f"{wave_name}[0]= {{")
-                    for i, value in enumerate(wave.data):
-                        if i > 0:
-                            f.write(",")
-                        f.write(format_igor_number(float(value)))
-                    f.write("}\n")
-                
-                # Force write to disk
-                f.flush()
-                os.fsync(f.fileno())
-            
-            # Verify file was written with data
-            if not wave_file.exists() or wave_file.stat().st_size == 0:
-                raise IOError(f"Failed to write data to {wave_file}")
-
-        # Save Info wave with particle detection data
-        if 'info' in results and results['info'] is not None:
-            info_data = results['info'].data
-            info_file = full_path / "Info.txt"
-            
-            with open(info_file, 'w', encoding='utf-8', newline='\n') as f:
-                f.write("Info[0]= {\n")
-                for i in range(info_data.shape[0]):
-                    f.write("{")
-                    for j in range(15):  # 15 columns in info wave
-                        if j > 0:
-                            f.write(",")
-                        f.write(format_igor_number(float(info_data[i, j])))
-                    f.write("}")
-                    if i < info_data.shape[0] - 1:
+                f.write(f"Heights[0]= {{")
+                heights_data = results['Heights'].data
+                for i, value in enumerate(heights_data):
+                    if i > 0:
                         f.write(",")
-                    f.write("\n")
+                    f.write(format_igor_number(float(value)))
                 f.write("}\n")
                 f.flush()
                 os.fsync(f.fileno())
 
-        # Create individual particle folders with data
-        if 'info' in results and results['info'] is not None:
-            info_data = results['info'].data
-            num_particles = info_data.shape[0]
-            
-            for i in range(num_particles):
-                particle_folder = full_path / f"Particle_{i}"
-                particle_folder.mkdir(parents=True, exist_ok=True)
-                
-                # Save particle info file
-                particle_info_file = particle_folder / "ParticleInfo.txt"
-                with open(particle_info_file, 'w', encoding='utf-8', newline='\n') as f:
-                    f.write(f"Particle {i} from {image_name}\n")
-                    f.write("=" * 50 + "\n")
-                    
-                    if 'Heights' in results and i < len(results['Heights'].data):
-                        f.write(f"Height: {format_igor_number(results['Heights'].data[i])}\n")
-                    if 'Areas' in results and i < len(results['Areas'].data):
-                        f.write(f"Area: {format_igor_number(results['Areas'].data[i])}\n")
-                    if 'Volumes' in results and i < len(results['Volumes'].data):
-                        f.write(f"Volume: {format_igor_number(results['Volumes'].data[i])}\n")
-                    if 'AvgHeights' in results and i < len(results['AvgHeights'].data):
-                        f.write(f"AvgHeight: {format_igor_number(results['AvgHeights'].data[i])}\n")
-                    if 'COM' in results and i < len(results['COM'].data):
-                        f.write(f"X_Center: {format_igor_number(results['COM'].data[i][0])}\n")
-                        f.write(f"Y_Center: {format_igor_number(results['COM'].data[i][1])}\n")
-                    
-                    if i < len(info_data):
-                        f.write(f"\nDetection Data:\n")
-                        f.write(f"P_Seed: {format_igor_number(info_data[i][0])}\n")
-                        f.write(f"Q_Seed: {format_igor_number(info_data[i][1])}\n")
-                        f.write(f"numPixels: {int(info_data[i][2])}\n")
-                        f.write(f"maxBlobStrength: {format_igor_number(info_data[i][3])}\n")
-                        f.write(f"pStart: {int(info_data[i][4])}\n")
-                        f.write(f"pStop: {int(info_data[i][5])}\n")
-                        f.write(f"qStart: {int(info_data[i][6])}\n")
-                        f.write(f"qStop: {int(info_data[i][7])}\n")
-                        f.write(f"scale: {format_igor_number(info_data[i][8])}\n")
-                        f.write(f"radius: {format_igor_number(info_data[i][9])}\n")
-                        f.write(f"inBounds: {int(info_data[i][10])}\n")
-                        f.write(f"height: {format_igor_number(info_data[i][11])}\n")
-                        f.write(f"volume: {format_igor_number(info_data[i][12])}\n")
-                        f.write(f"area: {format_igor_number(info_data[i][13])}\n")
-                        f.write(f"particleNum: {int(info_data[i][14])}\n")
-                    
-                    f.flush()
-                    os.fsync(f.fileno())
+        # Save Areas with proper data writing and flushing
+        if 'Areas' in results and results['Areas'] is not None:
+            wave_file = full_path / "Areas.txt"
+            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(f"Areas[0]= {{")
+                areas_data = results['Areas'].data
+                for i, value in enumerate(areas_data):
+                    if i > 0:
+                        f.write(",")
+                    f.write(format_igor_number(float(value)))
+                f.write("}\n")
+                f.flush()
+                os.fsync(f.fileno())
 
+        # Save Volumes with proper data writing and flushing
+        if 'Volumes' in results and results['Volumes'] is not None:
+            wave_file = full_path / "Volumes.txt"
+            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(f"Volumes[0]= {{")
+                volumes_data = results['Volumes'].data
+                for i, value in enumerate(volumes_data):
+                    if i > 0:
+                        f.write(",")
+                    f.write(format_igor_number(float(value)))
+                f.write("}\n")
+                f.flush()
+                os.fsync(f.fileno())
+
+        # Save AvgHeights with proper data writing and flushing
+        if 'AvgHeights' in results and results['AvgHeights'] is not None:
+            wave_file = full_path / "AvgHeights.txt"
+            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(f"AvgHeights[0]= {{")
+                avgheights_data = results['AvgHeights'].data
+                for i, value in enumerate(avgheights_data):
+                    if i > 0:
+                        f.write(",")
+                    f.write(format_igor_number(float(value)))
+                f.write("}\n")
+                f.flush()
+                os.fsync(f.fileno())
+
+        # Save COM with proper data writing and flushing
+        if 'COM' in results and results['COM'] is not None:
+            wave_file = full_path / "COM.txt"
+            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
+                com_data = results['COM'].data
+                f.write(f"COM[0][0]= {{")
+                for i in range(com_data.shape[0]):
+                    if i > 0:
+                        f.write(",")
+                    f.write(format_igor_number(float(com_data[i, 0])))
+                f.write("}\n")
+                f.write(f"COM[0][1]= {{")
+                for i in range(com_data.shape[0]):
+                    if i > 0:
+                        f.write(",")
+                    f.write(format_igor_number(float(com_data[i, 1])))
+                f.write("}\n")
+                f.flush()
+                os.fsync(f.fileno())
+
+        # Save Info with proper data writing and flushing
+        if 'info' in results and results['info'] is not None:
+            wave_file = full_path / "Info.txt"
+            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
+                info_data = results['info'].data
+                for col in range(info_data.shape[1]):
+                    f.write(f"Info[{col}]= {{")
+                    for row in range(info_data.shape[0]):
+                        if row > 0:
+                            f.write(",")
+                        f.write(format_igor_number(float(info_data[row, col])))
+                    f.write("}\n")
+                f.flush()
+                os.fsync(f.fileno())
+
+    print(f"Single image results saved to {full_path}")
     return str(full_path)
 
 

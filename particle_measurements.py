@@ -538,161 +538,140 @@ def ViewParticles(im, info, mapNum=None, saved_data_path=None):
 
 def MeasureParticles(im, info):
     """
-    Measure particle properties from image
+    Measure particle properties using physical units from AFM calibration
+    Direct port from Igor Pro MeasureParticles function
 
     Parameters:
-    im : Wave - Original image
+    im : Wave - The image containing particles (with AFM calibration)
     info : Wave - Particle information array
-
-    Info array structure:
-    Column 0: P_Seed (X coordinate)
-    Column 1: Q_Seed (Y coordinate)
-    Column 2: Scale (characteristic radius)
-    Column 3: Response (blob strength)
-    Column 4: unused
-    Column 5: unused
-    Column 6: unused
-    Column 7: unused
-    Column 8: Area (physical units)
-    Column 9: Volume (integrated intensity)
-    Column 10: Height (peak intensity)
-    Column 11: X_Center (center of mass X)
-    Column 12: Y_Center (center of mass Y)
-    Column 13: AvgHeight (average intensity within particle)
-    Column 14: unused (for future expansion)
 
     Returns:
     bool - Success status
     """
-    if im is None or info is None:
-        return False
+    print("MeasureParticles: Starting particle measurement with physical units")
 
-    if info.data.shape[0] == 0:
-        return True  # No particles to measure
-
-    print(f"MeasureParticles: Measuring {info.data.shape[0]} particles...")
-
-    # Ensure info array has 15 columns
-    if info.data.shape[1] < 15:
-        # Expand array to hold all measurements
-        new_data = np.zeros((info.data.shape[0], 15))
-        new_data[:, :info.data.shape[1]] = info.data
-        info.data = new_data
-
+    # Get image dimensions
+    rows, cols = im.data.shape
     num_particles = info.data.shape[0]
 
-    # Get image dimensions and scaling
-    rows = im.data.shape[0]
-    cols = im.data.shape[1]
-
-    # Get scaling information
+    # Get physical scaling from wave
     x_scale = im.GetScale('x')
     y_scale = im.GetScale('y')
 
-    # Extract and use physical scaling from the image Wave
-    x_delta = x_scale['delta'] if x_scale['units'] else 1.0
-    y_delta = y_scale['delta'] if y_scale['units'] else 1.0
+    # Extract physical units
+    x_delta = x_scale['delta'] if x_scale['delta'] != 1.0 else 1.0
+    y_delta = y_scale['delta'] if y_scale['delta'] != 1.0 else 1.0
     x_units = x_scale['units'] if x_scale['units'] else 'pixels'
     y_units = y_scale['units'] if y_scale['units'] else 'pixels'
+    z_units = im.data_units if hasattr(im, 'data_units') and im.data_units else 'a.u.'
+
     x_offset = x_scale['offset']
     y_offset = y_scale['offset']
 
-    # Physical area per pixel
+    # Physical area per pixel (nm^2 if calibrated)
     pixel_area_physical = x_delta * y_delta
 
+    print(f"Physical scaling: X={x_delta} {x_units}/pixel, Y={y_delta} {y_units}/pixel")
+    print(f"Z units: {z_units}")
+
     for i in range(num_particles):
-        # Extract particle parameters
-        p_seed = info.data[i, 0]  # X coordinate
-        q_seed = info.data[i, 1]  # Y coordinate
-        scale = info.data[i, 2]  # Characteristic radius
-        response = info.data[i, 3]  # Blob strength
+        # Extract particle parameters from info array
+        p_seed = info.data[i, 0]  # X coordinate in pixels
+        q_seed = info.data[i, 1]  # Y coordinate in pixels
+        num_pixels = info.data[i, 2]  # Number of pixels
+        max_blob_strength = info.data[i, 3]  # Blob strength
+        p_start = info.data[i, 4]  # Bounding box start X
+        p_stop = info.data[i, 5]  # Bounding box stop X
+        q_start = info.data[i, 6]  # Bounding box start Y
+        q_stop = info.data[i, 7]  # Bounding box stop Y
+        scale = info.data[i, 8]  # Scale/radius in pixels
+        radius = info.data[i, 9]  # Radius in pixels
 
-        # Initialize measurements to zero
+        # Initialize measurements
         area_pixels = 0
-        volume = 0
-        height = 0
-        avg_height = 0
-        x_center_sum = 0
-        y_center_sum = 0
-        total_intensity = 0
+        volume_raw = 0
+        max_height = -np.inf
+        sum_heights = 0
+        weighted_x_sum = 0
+        weighted_y_sum = 0
+        total_weight = 0
 
-        # Calculate measurement region
-        # Use characteristic radius for measurement region
-        measurement_radius = scale
+        # Convert scale to physical units for measurement radius
+        measurement_radius_pixels = scale
+        measurement_radius_physical = measurement_radius_pixels * x_delta  # Assuming isotropic
 
-        # Bounds checking
-        x_min = max(0, int(p_seed - measurement_radius))
-        x_max = min(cols - 1, int(p_seed + measurement_radius))
-        y_min = max(0, int(q_seed - measurement_radius))
-        y_max = min(rows - 1, int(q_seed + measurement_radius))
+        # Calculate measurement region bounds
+        x_min = max(0, int(p_seed - measurement_radius_pixels))
+        x_max = min(cols - 1, int(p_seed + measurement_radius_pixels))
+        y_min = max(0, int(q_seed - measurement_radius_pixels))
+        y_max = min(rows - 1, int(q_seed + measurement_radius_pixels))
 
-        # Loop over measurement region
+        # Measure within circular region around particle center
         for y in range(y_min, y_max + 1):
             for x in range(x_min, x_max + 1):
-                # Calculate distance from particle center
+                # Calculate distance from particle center in pixels
                 dx = x - p_seed
                 dy = y - q_seed
-                distance = np.sqrt(dx * dx + dy * dy)
+                distance_pixels = np.sqrt(dx * dx + dy * dy)
 
                 # Check if pixel is within measurement radius
-                if distance <= measurement_radius:
+                if distance_pixels <= measurement_radius_pixels:
                     pixel_value = im.data[y, x]
 
-                    # Area measurement
+                    # Count pixels for area
                     area_pixels += 1
 
-                    # Volume measurement
-                    volume += pixel_value
+                    # Sum heights for volume
+                    volume_raw += pixel_value
+                    sum_heights += pixel_value
 
-                    # Height measurement
-                    if pixel_value > height:
-                        height = pixel_value
+                    # Track maximum height
+                    if pixel_value > max_height:
+                        max_height = pixel_value
 
-                    # Center of mass calculation
-                    x_center_sum += x * pixel_value
-                    y_center_sum += y * pixel_value
-                    total_intensity += pixel_value
+                    # Weighted position for center of mass
+                    weighted_x_sum += x * pixel_value
+                    weighted_y_sum += y * pixel_value
+                    total_weight += pixel_value
 
-        # Calculate derived measurements in measurement loop using physical units
-        if area_pixels > 0:
-            # Convert area from pixels² to nm² (if calibrated) 
-            area_physical = area_pixels * pixel_area_physical
-            
-            # Convert volume to nm³ equivalent (nm² × intensity units)
-            volume_physical = volume * pixel_area_physical
+        # Calculate physical measurements
 
-            # Calculate average height (remains in intensity units)
-            avg_height = volume / area_physical if area_physical > 0 else 0
+        # Area in physical units (nm^2 if calibrated)
+        area_physical = area_pixels * pixel_area_physical
 
-            # Calculate center of mass coordinates  
-            if total_intensity > 0:
-                x_center = x_center_sum / total_intensity
-                y_center = y_center_sum / total_intensity
+        # Volume in physical units (nm^2 * height_units)
+        # If Z is in nm, volume is in nm^3
+        volume_physical = volume_raw * pixel_area_physical
 
-                # Convert positions to physical coordinates (nm if calibrated)
-                x_center_phys = x_center * x_delta + x_offset
-                y_center_phys = y_center * y_delta + y_offset
-            else:
-                # Fallback to seed position if no intensity
-                x_center_phys = p_seed * x_delta + x_offset
-                y_center_phys = q_seed * y_delta + y_offset
+        # Average height (in Z units, typically nm)
+        avg_height = sum_heights / area_pixels if area_pixels > 0 else 0
+
+        # Height remains in original Z units (typically nm)
+        height_physical = max_height
+
+        # Calculate center of mass in physical coordinates
+        if total_weight > 0:
+            com_x_pixels = weighted_x_sum / total_weight
+            com_y_pixels = weighted_y_sum / total_weight
         else:
-            # No pixels found
-            area_physical = 0
-            volume_physical = 0
-            avg_height = 0
-            x_center_phys = p_seed * x_delta + x_offset
-            y_center_phys = q_seed * y_delta + y_offset
+            com_x_pixels = p_seed
+            com_y_pixels = q_seed
 
-        # Store measurements in info array
-        info.data[i, 8] = area_physical  # Area in physical units (nm² if calibrated)
-        info.data[i, 9] = volume_physical  # Volume in physical units (nm² × intensity)
-        info.data[i, 10] = height  # Height
-        info.data[i, 11] = x_center_phys  # X_Center
-        info.data[i, 12] = y_center_phys  # Y_Center
-        info.data[i, 13] = avg_height  # AvgHeight
+        # Convert COM to physical coordinates (nm if calibrated)
+        com_x_physical = com_x_pixels * x_delta + x_offset
+        com_y_physical = com_y_pixels * y_delta + y_offset
 
-    print(f"MeasureParticles: Completed measurement of {num_particles} particles")
+        # Store measurements in info array columns 11-13
+        # Heights stored separately, but we update info for completeness
+        info.data[i, 11] = height_physical  # Height in Z units (nm)
+        info.data[i, 12] = volume_physical  # Volume in nm^3
+        info.data[i, 13] = area_physical  # Area in nm^2
+
+        # Note: COM and AvgHeight are stored in separate waves in main_functions.py
+
+    print(f"MeasureParticles: Completed {num_particles} particles")
+    print(f"Units: Area={x_units}^2, Volume={x_units}^2*{z_units}, Height={z_units}")
+
     return True
 
 
