@@ -536,7 +536,7 @@ def ViewParticles(im, info, mapNum=None, saved_data_path=None):
     return viewer
 
 
-def MeasureParticles(im, info):
+def MeasureParticles(im, info, pixel_spacing_nm=1.0, height_units="nm"):
     """
     Measure particle properties using physical units from AFM calibration
     Direct port from Igor Pro MeasureParticles function
@@ -544,6 +544,8 @@ def MeasureParticles(im, info):
     Parameters:
     im : Wave - The image containing particles (with AFM calibration)
     info : Wave - Particle information array
+    pixel_spacing_nm : float - Lateral spacing between pixels in nanometers
+    height_units : str - Units for height values ("nm", "pm", "µm")
 
     Returns:
     bool - Success status
@@ -554,25 +556,21 @@ def MeasureParticles(im, info):
     rows, cols = im.data.shape
     num_particles = info.data.shape[0]
 
-    # Get physical scaling from wave
-    x_scale = im.GetScale('x')
-    y_scale = im.GetScale('y')
+    # Convert pixel measurements to physical units
+    area_nm2_per_pixel = pixel_spacing_nm ** 2  # nm²/pixel
+    volume_nm3_per_pixel = pixel_spacing_nm ** 2  # nm³/pixel (height already in nm)
+    
+    # Height unit conversion factors
+    height_conversion = {
+        "pm": 0.001,  # pm to nm
+        "nm": 1.0,    # nm to nm  
+        "µm": 1000.0  # µm to nm
+    }[height_units]
 
-    # Extract physical units
-    x_delta = x_scale['delta'] if x_scale['delta'] != 1.0 else 1.0
-    y_delta = y_scale['delta'] if y_scale['delta'] != 1.0 else 1.0
-    x_units = x_scale['units'] if x_scale['units'] else 'pixels'
-    y_units = y_scale['units'] if y_scale['units'] else 'pixels'
-    z_units = im.data_units if hasattr(im, 'data_units') and im.data_units else 'a.u.'
-
-    x_offset = x_scale['offset']
-    y_offset = y_scale['offset']
-
-    # Physical area per pixel (nm^2 if calibrated)
-    pixel_area_physical = x_delta * y_delta
-
-    print(f"Physical scaling: X={x_delta} {x_units}/pixel, Y={y_delta} {y_units}/pixel")
-    print(f"Z units: {z_units}")
+    print(f"Physical scaling: {pixel_spacing_nm} nm/pixel")
+    print(f"Height units: {height_units} (conversion factor: {height_conversion})")
+    print(f"Area per pixel: {area_nm2_per_pixel} nm²")
+    print(f"Volume per pixel: {volume_nm3_per_pixel} nm²")
 
     for i in range(num_particles):
         # Extract particle parameters from info array
@@ -636,18 +634,17 @@ def MeasureParticles(im, info):
 
         # Calculate physical measurements
 
-        # Area in physical units (nm^2 if calibrated)
-        area_physical = area_pixels * pixel_area_physical
+        # Area in nm²
+        area_physical = area_pixels * area_nm2_per_pixel
 
-        # Volume in physical units (nm^2 * height_units)
-        # If Z is in nm, volume is in nm^3
-        volume_physical = volume_raw * pixel_area_physical
+        # Volume in nm³
+        volume_physical = volume_raw * volume_nm3_per_pixel * height_conversion
 
-        # Average height (in Z units, typically nm)
-        avg_height = sum_heights / area_pixels if area_pixels > 0 else 0
+        # Average height (converted to nm)
+        avg_height = (sum_heights / area_pixels * height_conversion) if area_pixels > 0 else 0
 
-        # Height remains in original Z units (typically nm)
-        height_physical = max_height
+        # Height converted to nm
+        height_physical = max_height * height_conversion
 
         # Calculate center of mass in physical coordinates
         if total_weight > 0:
@@ -657,9 +654,9 @@ def MeasureParticles(im, info):
             com_x_pixels = p_seed
             com_y_pixels = q_seed
 
-        # Convert COM to physical coordinates (nm if calibrated)
-        com_x_physical = com_x_pixels * x_delta + x_offset
-        com_y_physical = com_y_pixels * y_delta + y_offset
+        # Convert COM to physical coordinates (nm)
+        com_x_physical = com_x_pixels * pixel_spacing_nm
+        com_y_physical = com_y_pixels * pixel_spacing_nm
 
         # Store measurements in info array columns 11-13
         # Heights stored separately, but we update info for completeness
@@ -670,7 +667,7 @@ def MeasureParticles(im, info):
         # Note: COM and AvgHeight are stored in separate waves in main_functions.py
 
     print(f"MeasureParticles: Completed {num_particles} particles")
-    print(f"Units: Area={x_units}^2, Volume={x_units}^2*{z_units}, Height={z_units}")
+    print(f"Units: Area=nm², Volume=nm³, Height=nm")
 
     return True
 

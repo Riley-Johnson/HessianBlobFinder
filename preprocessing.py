@@ -144,6 +144,50 @@ def BatchPreprocess():
 
             self.setup_ui()
 
+        # Tkinter compatibility methods to prevent attribute errors
+        @property
+        def tk(self):
+            """Provide access to tkinter instance for compatibility"""
+            return self.root.tk
+        
+        @property
+        def _last_child_ids(self):
+            """Provide access to tkinter _last_child_ids for compatibility"""
+            return self.root._last_child_ids
+        
+        @property
+        def _w(self):
+            """Provide access to tkinter _w (widget name) for compatibility"""
+            return self.root._w
+            
+        @property
+        def children(self):
+            """Provide access to tkinter children for compatibility"""
+            return self.root.children
+            
+        def __getattr__(self, name):
+            """
+            Fallback for any missing attributes - delegate to root window
+            This ensures compatibility with any tkinter attributes that might be accessed
+            """
+            if hasattr(self.root, name):
+                attr = getattr(self.root, name)
+                # If it's a method, return a wrapper that calls it
+                if callable(attr):
+                    return lambda *args, **kwargs: attr(*args, **kwargs)
+                # If it's a property or attribute, return it directly
+                return attr
+            # If the attribute doesn't exist on root either, raise AttributeError
+            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+            
+        def __str__(self):
+            """Return the root window path when converted to string"""
+            return str(self.root)
+            
+        def __repr__(self):
+            """Return a proper representation that can be used as window reference"""
+            return str(self.root)
+
         def setup_ui(self):
             """Setup the preprocessing GUI"""
             main_frame = ttk.Frame(self.root, padding="10")

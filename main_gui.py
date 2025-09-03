@@ -59,6 +59,101 @@ class HessianBlobGUI:
         self.log_message("4. Toggle 'Show Blobs' to view detected particles")
         self.log_message("")
         self.log_message("Ready for analysis...")
+        
+    @property
+    def tk(self):
+        """Provide access to tkinter instance for compatibility"""
+        return self.root.tk
+    
+    @property
+    def _last_child_ids(self):
+        """Provide access to tkinter _last_child_ids for compatibility"""
+        return self.root._last_child_ids
+    
+    @property
+    def _w(self):
+        """Provide access to tkinter _w (widget name) for compatibility"""
+        return self.root._w
+        
+    @property
+    def children(self):
+        """Provide access to tkinter children for compatibility"""
+        return self.root.children
+        
+    def focus_set(self):
+        """Delegate focus_set to root window"""
+        return self.root.focus_set()
+        
+    def focus_get(self):
+        """Delegate focus_get to root window"""
+        return self.root.focus_get()
+        
+    def winfo_children(self):
+        """Delegate winfo_children to root window"""
+        return self.root.winfo_children()
+        
+    def winfo_toplevel(self):
+        """Delegate winfo_toplevel to root window"""
+        return self.root.winfo_toplevel()
+        
+    def winfo_name(self):
+        """Delegate winfo_name to root window"""
+        return self.root.winfo_name()
+        
+    def winfo_class(self):
+        """Delegate winfo_class to root window"""  
+        return self.root.winfo_class()
+        
+    def nametowidget(self, name):
+        """Delegate nametowidget to root window"""
+        return self.root.nametowidget(name)
+        
+    def call(self, *args):
+        """Delegate call to root window"""
+        return self.root.call(*args)
+        
+    def eval(self, script):
+        """Delegate eval to root window"""
+        return self.root.eval(script)
+        
+    def getvar(self, name):
+        """Delegate getvar to root window"""
+        return self.root.getvar(name)
+        
+    def setvar(self, name, value):
+        """Delegate setvar to root window"""
+        return self.root.setvar(name, value)
+        
+    def winfo_pathname(self, winid):
+        """Delegate winfo_pathname to root window"""
+        return self.root.winfo_pathname(winid)
+        
+    def winfo_id(self):
+        """Delegate winfo_id to root window"""
+        return self.root.winfo_id()
+        
+    def __str__(self):
+        """Return the root window path when converted to string"""
+        return str(self.root)
+        
+    def __repr__(self):
+        """Return a proper representation that can be used as window reference"""
+        return str(self.root)
+        
+    def __getattr__(self, name):
+        """
+        Fallback for any missing attributes - delegate to root window
+        This ensures compatibility with any tkinter attributes that might be accessed
+        """
+        if hasattr(self.root, name):
+            attr = getattr(self.root, name)
+            # If it's a method, return a wrapper that calls it
+            if callable(attr):
+                return lambda *args, **kwargs: attr(*args, **kwargs)
+            # If it's a property or attribute, return it directly
+            return attr
+        # If the attribute doesn't exist on root either, raise AttributeError
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
     def setup_ui(self):
         """Setup the main user interface with intuitive layout"""
@@ -923,7 +1018,7 @@ class HessianBlobGUI:
 
         try:
             # Get parameters
-            params = get_analysis_parameters(self.current_display_image, self)
+            params = get_analysis_parameters(self.current_display_image, self.root)
             if params is None:
                 self.log_message("Analysis cancelled by user")
                 return
@@ -946,7 +1041,9 @@ class HessianBlobGUI:
                 minA=params.get('minA', float('-inf')),
                 maxA=params.get('maxA', float('inf')),
                 minV=params.get('minV', float('-inf')),
-                maxV=params.get('maxV', float('inf'))
+                maxV=params.get('maxV', float('inf')),
+                pixel_spacing_nm=params.get('pixel_spacing_nm', 1.0),
+                height_units=params.get('height_units', 'nm')
             )
 
             # Single analysis completed
@@ -1073,7 +1170,7 @@ class HessianBlobGUI:
         
         try:
             # Get analysis parameters
-            params = get_analysis_parameters(self.current_display_image, self)
+            params = get_analysis_parameters(self.current_display_image, self.root)
             
             if params is None:
                 self.log_message("Analysis cancelled by user")
@@ -1090,7 +1187,9 @@ class HessianBlobGUI:
                 detHResponseThresh=params['detHResponseThresh'],
                 particleType=params['particleType'],
                 subPixelMult=params['subPixelMult'],
-                allowOverlap=params['allowOverlap']
+                allowOverlap=params['allowOverlap'],
+                pixel_spacing_nm=params.get('pixel_spacing_nm', 1.0),
+                height_units=params.get('height_units', 'nm')
             )
             
             # Verify results before proceeding
@@ -1127,7 +1226,7 @@ class HessianBlobGUI:
 
         try:
             # Get parameters once for all images
-            params = get_analysis_parameters(self.current_display_image, self)
+            params = get_analysis_parameters(self.current_display_image, self.root)
             if params is None:
                 return
 
@@ -1206,7 +1305,9 @@ class HessianBlobGUI:
                         minA=params.get('minA', float('-inf')),
                         maxA=params.get('maxA', float('inf')),
                         minV=params.get('minV', float('-inf')),
-                        maxV=params.get('maxV', float('inf'))
+                        maxV=params.get('maxV', float('inf')),
+                        pixel_spacing_nm=params.get('pixel_spacing_nm', 1.0),
+                        height_units=params.get('height_units', 'nm')
                     )
                     print(f"HessianBlobs returned: {type(results)}")
 
@@ -1547,26 +1648,27 @@ class HessianBlobGUI:
             import numpy as np
 
             # Enhanced file detection for both Series_X and individual result folders
+            results_path = Path(results_folder)
             measurement_files = {
-                'AllHeights': os.path.join(results_folder, 'AllHeights.txt'),
-                'AllAreas': os.path.join(results_folder, 'AllAreas.txt'),
-                'AllVolumes': os.path.join(results_folder, 'AllVolumes.txt'),
-                'AllAvgHeights': os.path.join(results_folder, 'AllAvgHeights.txt'),
-                'AllCOM': os.path.join(results_folder, 'AllCOM.txt'),  # Center of mass for batch results
-                'Heights': os.path.join(results_folder, 'Heights.txt'),
-                'Areas': os.path.join(results_folder, 'Areas.txt'),
-                'Volumes': os.path.join(results_folder, 'Volumes.txt'),
-                'COM': os.path.join(results_folder, 'COM.txt'),
-                'Info': os.path.join(results_folder, 'Info.txt')
+                'AllHeights': results_path / 'AllHeights.txt',
+                'AllAreas': results_path / 'AllAreas.txt',
+                'AllVolumes': results_path / 'AllVolumes.txt',
+                'AllAvgHeights': results_path / 'AllAvgHeights.txt',
+                'AllCOM': results_path / 'AllCOM.txt',  # Center of mass for batch results
+                'Heights': results_path / 'Heights.txt',
+                'Areas': results_path / 'Areas.txt',
+                'Volumes': results_path / 'Volumes.txt',
+                'COM': results_path / 'COM.txt',
+                'Info': results_path / 'Info.txt'
             }
 
             # Check if this is a Series_X folder (batch results) or individual results
             is_series_folder = any(
-                os.path.exists(measurement_files[name]) for name in ['AllHeights', 'AllAreas', 'AllVolumes'])
+                Path(measurement_files[name]).exists() for name in ['AllHeights', 'AllAreas', 'AllVolumes'])
             is_individual_folder = any(
-                os.path.exists(measurement_files[name]) for name in ['Heights', 'Areas', 'Volumes'])
+                Path(measurement_files[name]).exists() for name in ['Heights', 'Areas', 'Volumes'])
 
-            if not (is_series_folder or is_individual_folder or os.path.exists(measurement_files['Info'])):
+            if not (is_series_folder or is_individual_folder or Path(measurement_files['Info']).exists()):
                 return None
 
             # Load the measurement data for histogram
@@ -1763,17 +1865,18 @@ class HessianBlobGUI:
             folder_name = os.path.basename(results_folder)
 
             # Try to load measurement waves
+            results_path = Path(results_folder)
             measurement_files = {
-                'Heights': os.path.join(results_folder, 'Heights.txt'),
-                'Areas': os.path.join(results_folder, 'Areas.txt'),
-                'Volumes': os.path.join(results_folder, 'Volumes.txt'),
-                'AvgHeights': os.path.join(results_folder, 'AvgHeights.txt'),
-                'COM': os.path.join(results_folder, 'COM.txt'),
-                'Info': os.path.join(results_folder, 'Info.txt')
+                'Heights': results_path / 'Heights.txt',
+                'Areas': results_path / 'Areas.txt',
+                'Volumes': results_path / 'Volumes.txt',
+                'AvgHeights': results_path / 'AvgHeights.txt',
+                'COM': results_path / 'COM.txt',
+                'Info': results_path / 'Info.txt'
             }
 
             # Check if required files exist
-            if not all(os.path.exists(f) for f in [measurement_files['Heights'], measurement_files['Info']]):
+            if not all(Path(f).exists() for f in [measurement_files['Heights'], measurement_files['Info']]):
                 return False
 
             # Load the measurement data
@@ -2087,8 +2190,8 @@ class HessianBlobGUI:
 
     def save_batch_results_to_files(self, output_dir, save_vars, file_format):
         """Save batch analysis results to files"""
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        if not Path(output_dir).exists():
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
 
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2119,12 +2222,12 @@ class HessianBlobGUI:
                     if info.data.shape[0] > 0:  # Has particles
                         safe_name = "".join(c for c in image_name if c.isalnum() or c in '._-')
                         filename = f"particles_{safe_name}_{timestamp}.{file_format}"
-                        filepath = os.path.join(output_dir, filename)
+                        filepath = Path(output_dir) / filename
                         self.save_info_data(info, filepath, file_format, image_name)
         else:
             # Save combined file for all images
             filename = f"batch_particles_{timestamp}.{file_format}"
-            filepath = os.path.join(output_dir, filename)
+            filepath = Path(output_dir) / filename
             self.save_combined_particle_info(filepath, file_format)
 
     def save_info_data(self, info, filepath, file_format, image_name):
@@ -2248,11 +2351,11 @@ class HessianBlobGUI:
 
                 # Save detH
                 detH_file = f"detH_{safe_name}_{timestamp}.npy"
-                np.save(os.path.join(output_dir, detH_file), results['detH'].data)
+                np.save(Path(output_dir) / detH_file, results['detH'].data)
 
                 # Save LapG
                 lapG_file = f"LapG_{safe_name}_{timestamp}.npy"
-                np.save(os.path.join(output_dir, lapG_file), results['LG'].data)
+                np.save(Path(output_dir) / lapG_file, results['LG'].data)
 
     def save_blob_maps(self, output_dir, file_format, timestamp, individual_files):
         """Save blob detection maps (maxima locations)"""
@@ -2262,16 +2365,16 @@ class HessianBlobGUI:
 
                 # Save maxima map
                 maxmap_file = f"maxmap_{safe_name}_{timestamp}.npy"
-                np.save(os.path.join(output_dir, maxmap_file), results['SS_MAXMAP'].data)
+                np.save(Path(output_dir) / maxmap_file, results['SS_MAXMAP'].data)
 
                 # Save scale map
                 scalemap_file = f"scalemap_{safe_name}_{timestamp}.npy"
-                np.save(os.path.join(output_dir, scalemap_file), results['SS_MAXSCALEMAP'].data)
+                np.save(Path(output_dir) / scalemap_file, results['SS_MAXSCALEMAP'].data)
 
     def save_analysis_summary(self, output_dir, timestamp):
         """Save analysis summary report"""
         filename = f"analysis_summary_{timestamp}.txt"
-        filepath = os.path.join(output_dir, filename)
+        filepath = Path(output_dir) / filename
 
         with open(filepath, 'w') as f:
             f.write('Hessian Blob Batch Analysis Summary Report\n')

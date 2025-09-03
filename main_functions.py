@@ -249,7 +249,8 @@ def ScanlineFill8_LG(detH, mask, LG, p0, q0, thresh, fillVal=1):
         if mask[y, x] != 0:
             continue
         
-        if LG[y, x] < thresh:
+        # Use absolute value comparison since LG can be negative for some blob types
+        if abs(LG[y, x]) < thresh:
             continue
         
         mask[y, x] = fillVal
@@ -1118,6 +1119,24 @@ def get_analysis_parameters(image_wave, root=None):
         row=row, column=0, sticky=tk.W, pady=5)
     overlap_var = tk.IntVar(value=0)
     ttk.Entry(scrollable_frame, textvariable=overlap_var, width=20).grid(row=row, column=1, padx=10, pady=5)
+    row += 1
+    
+    # AFM Physical Scaling Section
+    afm_frame = ttk.LabelFrame(scrollable_frame, text="AFM Physical Scaling", padding=10)
+    afm_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=10)
+    row += 1
+
+    # Pixel spacing input
+    ttk.Label(afm_frame, text="Lateral pixel spacing (nm):").grid(row=0, column=0, sticky=tk.W, pady=2)
+    pixel_spacing_var = tk.DoubleVar(value=1.0)
+    ttk.Entry(afm_frame, textvariable=pixel_spacing_var, width=20).grid(row=0, column=1, padx=10, pady=2)
+
+    # Height units
+    ttk.Label(afm_frame, text="Z height units:").grid(row=1, column=0, sticky=tk.W, pady=2)
+    height_units_var = tk.StringVar(value="nm")
+    height_combo = ttk.Combobox(afm_frame, textvariable=height_units_var, values=["nm", "pm", "µm"], width=17)
+    height_combo.grid(row=1, column=1, padx=10, pady=2)
+    height_combo.state(['readonly'])
     
     # Update scroll region
     scrollable_frame.update_idletasks()
@@ -1132,7 +1151,9 @@ def get_analysis_parameters(image_wave, root=None):
             'particleType': particle_type_var.get(),
             'maxCurvatureRatio': 10,
             'subPixelMult': subpixel_var.get(),
-            'allowOverlap': overlap_var.get()
+            'allowOverlap': overlap_var.get(),
+            'pixel_spacing_nm': pixel_spacing_var.get(),
+            'height_units': height_units_var.get()
         }
         dialog.destroy()
     
@@ -1254,6 +1275,50 @@ class ThresholdSelectionWindow:
 
         self.setup_gui()
 
+    # Tkinter compatibility methods to prevent attribute errors
+    @property
+    def tk(self):
+        """Provide access to tkinter instance for compatibility"""
+        return self.root.tk
+    
+    @property
+    def _last_child_ids(self):
+        """Provide access to tkinter _last_child_ids for compatibility"""
+        return self.root._last_child_ids
+    
+    @property
+    def _w(self):
+        """Provide access to tkinter _w (widget name) for compatibility"""
+        return self.root._w
+        
+    @property
+    def children(self):
+        """Provide access to tkinter children for compatibility"""
+        return self.root.children
+        
+    def __getattr__(self, name):
+        """
+        Fallback for any missing attributes - delegate to root window
+        This ensures compatibility with any tkinter attributes that might be accessed
+        """
+        if hasattr(self.root, name):
+            attr = getattr(self.root, name)
+            # If it's a method, return a wrapper that calls it
+            if callable(attr):
+                return lambda *args, **kwargs: attr(*args, **kwargs)
+            # If it's a property or attribute, return it directly
+            return attr
+        # If the attribute doesn't exist on root either, raise AttributeError
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+        
+    def __str__(self):
+        """Return the root window path when converted to string"""
+        return str(self.root)
+        
+    def __repr__(self):
+        """Return a proper representation that can be used as window reference"""
+        return str(self.root)
+
     def find_particle_range(self):
         """Find the range where particles are detected """
         # First identify the maxes
@@ -1318,19 +1383,32 @@ class ThresholdSelectionWindow:
         # Update the threshold variable
         self.thresh_var = tk.DoubleVar(value=self.current_thresh)
 
-        # Top: Accept/Quit buttons
+        # FIXED: Button frame at bottom of controls with platform fixes
         button_frame = ttk.Frame(controls_container)
-        button_frame.pack(fill=tk.X, pady=(0, 5))
-
-        accept_btn = ttk.Button(button_frame, text="Accept",
-                                command=self.accept_threshold,
-                                width=12)
-        accept_btn.pack(side=tk.LEFT, padx=(0, 5))
-
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+        
+        accept_btn = ttk.Button(button_frame, text="Accept", 
+                               command=self.accept_threshold, width=12)
+        accept_btn.pack(side=tk.LEFT, padx=5)
+        
         quit_btn = ttk.Button(button_frame, text="Quit",
-                              command=self.cancel_threshold,
-                              width=12)
-        quit_btn.pack(side=tk.LEFT)
+                             command=self.cancel_threshold, width=12)  
+        quit_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Platform-specific button visibility fixes
+        import platform
+        if platform.system() == "Windows":
+            # Windows terminal fix
+            button_frame.update()
+            accept_btn.update()
+            quit_btn.update()
+            
+            self.root.after(50, lambda: button_frame.update_idletasks())
+            self.root.after(100, lambda: accept_btn.focus_set())
+            
+        # Force window geometry to include buttons
+        self.root.geometry("1200x800")
+        self.root.minsize(1200, 800)
 
         # SetVariable control
         setvar_frame = ttk.Frame(controls_container)
@@ -1542,7 +1620,7 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
                  detHResponseThresh=-2, particleType=1, maxCurvatureRatio=10,
                  subPixelMult=1, allowOverlap=0, params=None,
                  minH=-np.inf, maxH=np.inf, minV=-np.inf, maxV=np.inf,
-                 minA=-np.inf, maxA=np.inf):
+                 minA=-np.inf, maxA=np.inf, pixel_spacing_nm=1.0, height_units="nm"):
     """
     Executes the Hessian blob algorithm on an image.
     Direct 1:1 port from Igor Pro HessianBlobs function
@@ -1815,6 +1893,7 @@ def HessianBlobs(im, scaleStart=1, layers=None, scaleFactor=1.5,
             0 <= scale_layer < LG.data.shape[2]):
 
             # Get threshold for this scale layer
+            # Use absolute value since LG can be negative
             lg_thresh = np.sqrt(info.data[i, 3])  # Square root of blob strength
 
             # 8-connected flood fill based on LG values
@@ -2689,7 +2768,7 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
 
         for image_name, results in batch_results['image_results'].items():
             # Clean image name for folder (remove extension, special chars)
-            clean_image_name = os.path.splitext(image_name)[0]
+            clean_image_name = Path(image_name).stem
             clean_image_name = "".join(c for c in clean_image_name if c.isalnum() or c in ('_', '-'))
 
             # Create individual image folder within Series_X
@@ -2831,7 +2910,7 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
             print(f"├── AllCOM.txt")
         print(f"├── Info.txt (consolidated)")
         for image_name in batch_results['image_results'].keys():
-            clean_name = os.path.splitext(image_name)[0]
+            clean_name = Path(image_name).stem
             clean_name = "".join(c for c in clean_name if c.isalnum() or c in ('_', '-'))
             print(f"├── {clean_name}_Particles/")
             print(f"│   ├── Heights.txt, Areas.txt, Volumes.txt, AvgHeights.txt, COM.txt, Info.txt")
@@ -2861,16 +2940,19 @@ def SaveBatchResults(batch_results, output_path="", save_format="igor"):
 
 
 def SaveSingleImageResults(results, image_name, output_path="", save_format="igor"):
-    """
-    Save single image analysis results
-    """
+    """Save single image analysis results - FIXED VERSION"""
     import os
     import datetime
     import numpy as np
     from pathlib import Path
-
-    if not verify_analysis_results(results):
-        raise ValueError("Analysis results validation failed")
+    
+    # Validate results structure
+    if not results or 'info' not in results:
+        raise ValueError("Results missing required 'info' data")
+    
+    info = results['info']
+    if info is None or info.data.size == 0:
+        raise ValueError("No particle info data to save")
 
     if not output_path:
         output_path = Path.cwd()
@@ -2883,108 +2965,65 @@ def SaveSingleImageResults(results, image_name, output_path="", save_format="igo
     if not os.access(str(output_path), os.W_OK):
         raise PermissionError(f"No write permission for output path: {output_path}")
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    clean_image_name = os.path.splitext(image_name)[0]
+    # Create output directory
+    clean_image_name = Path(image_name).stem
     clean_image_name = "".join(c for c in clean_image_name if c.isalnum() or c in ('_', '-'))
     folder_name = f"{clean_image_name}_Particles"
     full_path = output_path / folder_name
-
+    
     full_path.mkdir(parents=True, exist_ok=True)
 
-    if save_format == "igor" or save_format == "txt":
-        # Save Heights with proper data writing and flushing
-        if 'Heights' in results and results['Heights'] is not None:
-            wave_file = full_path / "Heights.txt"
-            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(f"Heights[0]= {{")
-                heights_data = results['Heights'].data
-                for i, value in enumerate(heights_data):
-                    if i > 0:
-                        f.write(",")
-                    f.write(format_igor_number(float(value)))
-                f.write("}\n")
-                f.flush()
-                os.fsync(f.fileno())
-
-        # Save Areas with proper data writing and flushing
-        if 'Areas' in results and results['Areas'] is not None:
-            wave_file = full_path / "Areas.txt"
-            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(f"Areas[0]= {{")
-                areas_data = results['Areas'].data
-                for i, value in enumerate(areas_data):
-                    if i > 0:
-                        f.write(",")
-                    f.write(format_igor_number(float(value)))
-                f.write("}\n")
-                f.flush()
-                os.fsync(f.fileno())
-
-        # Save Volumes with proper data writing and flushing
-        if 'Volumes' in results and results['Volumes'] is not None:
-            wave_file = full_path / "Volumes.txt"
-            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(f"Volumes[0]= {{")
-                volumes_data = results['Volumes'].data
-                for i, value in enumerate(volumes_data):
-                    if i > 0:
-                        f.write(",")
-                    f.write(format_igor_number(float(value)))
-                f.write("}\n")
-                f.flush()
-                os.fsync(f.fileno())
-
-        # Save AvgHeights with proper data writing and flushing
-        if 'AvgHeights' in results and results['AvgHeights'] is not None:
-            wave_file = full_path / "AvgHeights.txt"
-            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(f"AvgHeights[0]= {{")
-                avgheights_data = results['AvgHeights'].data
-                for i, value in enumerate(avgheights_data):
-                    if i > 0:
-                        f.write(",")
-                    f.write(format_igor_number(float(value)))
-                f.write("}\n")
-                f.flush()
-                os.fsync(f.fileno())
-
-        # Save COM with proper data writing and flushing
-        if 'COM' in results and results['COM'] is not None:
-            wave_file = full_path / "COM.txt"
-            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
-                com_data = results['COM'].data
-                f.write(f"COM[0][0]= {{")
-                for i in range(com_data.shape[0]):
-                    if i > 0:
-                        f.write(",")
-                    f.write(format_igor_number(float(com_data[i, 0])))
-                f.write("}\n")
-                f.write(f"COM[0][1]= {{")
-                for i in range(com_data.shape[0]):
-                    if i > 0:
-                        f.write(",")
-                    f.write(format_igor_number(float(com_data[i, 1])))
-                f.write("}\n")
-                f.flush()
-                os.fsync(f.fileno())
-
-        # Save Info with proper data writing and flushing
-        if 'info' in results and results['info'] is not None:
-            wave_file = full_path / "Info.txt"
-            with open(wave_file, 'w', encoding='utf-8', newline='\n') as f:
-                info_data = results['info'].data
-                for col in range(info_data.shape[1]):
-                    f.write(f"Info[{col}]= {{")
-                    for row in range(info_data.shape[0]):
-                        if row > 0:
-                            f.write(",")
-                        f.write(format_igor_number(float(info_data[row, col])))
-                    f.write("}\n")
-                f.flush()
-                os.fsync(f.fileno())
-
-    print(f"Single image results saved to {full_path}")
+    # Save particle info with Igor Pro column headers
+    info_file = full_path / "info.txt"
+    headers = ["P_Seed", "Q_Seed", "numPixels", "maxBlobStrength", "pStart", "pStop", 
+               "qStart", "qStop", "scale", "radius", "inBounds", "height", "volume", 
+               "area", "particleNum"]
+    
+    with open(info_file, 'w') as f:
+        f.write('\t'.join(headers) + '\n')
+        for row in info.data:
+            f.write('\t'.join(f"{val:.6e}" if isinstance(val, float) else str(val) for val in row) + '\n')
+    
+    # Save measurements with physical units
+    if 'Heights' in results and results['Heights'] is not None:
+        heights_file = full_path / "Heights.txt"
+        with open(heights_file, 'w') as f:
+            f.write("# Height measurements in nm\n")
+            for height in results['Heights'].data:
+                f.write(f"{height:.6e}\n")
+    
+    # Save areas with physical units  
+    if 'Areas' in results and results['Areas'] is not None:
+        areas_file = full_path / "Areas.txt"
+        with open(areas_file, 'w') as f:
+            f.write("# Area measurements in nm²\n")
+            for area in results['Areas'].data:
+                f.write(f"{area:.6e}\n")
+    
+    # Save volumes with physical units
+    if 'Volumes' in results and results['Volumes'] is not None:
+        volumes_file = full_path / "Volumes.txt"
+        with open(volumes_file, 'w') as f:
+            f.write("# Volume measurements in nm³\n")
+            for volume in results['Volumes'].data:
+                f.write(f"{volume:.6e}\n")
+    
+    # Save blob detection maps
+    if 'SS_MAXMAP' in results and results['SS_MAXMAP'] is not None:
+        maxmap_file = full_path / "SS_MAXMAP.txt"
+        np.savetxt(maxmap_file, results['SS_MAXMAP'].data, delimiter='\t', fmt='%.6e')
+    
+    if 'SS_MAXSCALEMAP' in results and results['SS_MAXSCALEMAP'] is not None:
+        scalemap_file = full_path / "SS_MAXSCALEMAP.txt"  
+        np.savetxt(scalemap_file, results['SS_MAXSCALEMAP'].data, delimiter='\t', fmt='%.6e')
+    
+    # Verify all files were written with data
+    all_files = list(full_path.glob("*.txt"))
+    empty_files = [f for f in all_files if f.stat().st_size == 0]
+    if empty_files:
+        raise ValueError(f"Empty files created: {[f.name for f in empty_files]}")
+    
+    print(f"Saved {len(all_files)} files with data to {full_path}")
     return str(full_path)
 
 
